@@ -11,33 +11,35 @@
   window._floop = {
     // Click the "Trade" tab at the bottom-left (next to "Replay Trading")
     openTradePanel: function() {
-      // Check if order panel with Sell/Buy is already visible
+      // Check if order panel with Sell/Buy is actually visible (width > 50)
       var panel = document.querySelector('[class*=orderWidget], [class*=orderTicket], [class*=orderPanel]');
       if (panel && panel.offsetParent && panel.offsetWidth > 50) {
         var text = panel.textContent || '';
         if (/Sell.*Buy|Buy.*Sell/i.test(text)) return 'already_open';
       }
-      // Find the "Trade" tab near "Replay Trading" text
-      // Search all visible elements with text "Trade"
-      var all = document.querySelectorAll('button, div, span, a');
-      for (var i = 0; i < all.length; i++) {
-        var el = all[i];
+      // Find a leaf SPAN with text exactly "Trade" (the bottom tab)
+      var spans = document.querySelectorAll('span');
+      for (var i = 0; i < spans.length; i++) {
+        var el = spans[i];
         if (!el.offsetParent) continue;
-        var text = (el.textContent || '').trim();
-        // Must be exactly "Trade" and near "Replay Trading"
-        if (text === 'Trade') {
-          // Check if a sibling or nearby element says "Replay Trading"
-          var parent = el.parentElement;
-          if (parent && /Replay Trading/i.test(parent.textContent)) {
+        if (el.children.length > 0) continue;
+        if (el.textContent.trim() === 'Trade') {
+          // Verify it's in the bottom half of the page (not the top Trade button)
+          var rect = el.getBoundingClientRect();
+          if (rect.top > window.innerHeight * 0.5) {
             el.click();
             return 'trade_tab_clicked';
           }
-          // Also check grandparent
-          var gp = parent ? parent.parentElement : null;
-          if (gp && /Replay Trading/i.test(gp.textContent)) {
-            el.click();
-            return 'trade_tab_clicked_gp';
-          }
+        }
+      }
+      // Fallback: click any "Trade" span regardless of position
+      for (var i = 0; i < spans.length; i++) {
+        var el = spans[i];
+        if (!el.offsetParent) continue;
+        if (el.children.length > 0) continue;
+        if (el.textContent.trim() === 'Trade') {
+          el.click();
+          return 'trade_tab_clicked_fallback';
         }
       }
       return 'trade_tab_not_found';
