@@ -173,8 +173,110 @@ class TVBridge:
         return self._run_cli("replay", "status", timeout=10)
 
     def replay_trade(self, action: str) -> MCPResult:
-        """Execute a replay trade: buy, sell, or close."""
-        return self._run_cli("replay", "trade", action, timeout=10)
+        """Execute a replay trade: buy, sell, or close.
+
+        Uses DOM clicks on TradingView's order panel since the replay API's
+        buy()/sell() methods don't actually create trades.
+        """
+        return self._replay_trade_via_ui(action)
+
+    def _replay_trade_via_ui(self, action: str) -> MCPResult:
+        """Click Buy/Sell/Close in TradingView's order panel via DOM."""
+        if action == "buy":
+            return self._place_order_via_ui("Buy")
+        elif action == "sell":
+            return self._place_order_via_ui("Sell")
+        elif action == "close":
+            return self._close_position_via_ui()
+        else:
+            return MCPResult(success=False, data={}, error=f"Unknown action: {action}")
+
+    def _place_order_via_ui(self, side: str) -> MCPResult:
+        """Select side, switch to Market, click Place Order."""
+        # Step 1: Click the Buy or Sell side selector
+        js_select_side = (
+            '(function() {'
+            '  var all = document.querySelectorAll("[class*=order] *, [class*=trading] *");'
+            '  for (var i = 0; i < all.length; i++) {'
+            '    var e = all[i];'
+            '    var text = (e.textContent || "").trim();'
+            f'    if (/^{side}$/i.test(text) && e.offsetParent !== null && e.children.length === 0) {{'
+            '      e.click();'
+            f'      return "selected_{side.lower()}";'
+            '    }'
+            '  }'
+            f'  return "no_{side.lower()}_element";'
+            '})()'
+        )
+        result1 = self._run_cli("ui", "eval", js_select_side, timeout=10)
+        if not result1.success:
+            return result1
+        side_result = result1.data.get("result", "")
+        if "no_" in str(side_result):
+            return MCPResult(success=False, data={}, error=f"Could not find {side} selector in order panel")
+
+        # Step 2: Click Market order type tab
+        js_market = (
+            '(function() {'
+            '  var tabs = document.querySelectorAll("button, [class*=tab]");'
+            '  for (var i = 0; i < tabs.length; i++) {'
+            '    if (/^Market$/i.test(tabs[i].textContent.trim()) && tabs[i].offsetParent !== null) {'
+            '      tabs[i].click();'
+            '      return "market_selected";'
+            '    }'
+            '  }'
+            '  return "market_not_found";'
+            '})()'
+        )
+        result2 = self._run_cli("ui", "eval", js_market, timeout=10)
+
+        # Step 3: Click Place Order button
+        time.sleep(0.3)
+        js_place = (
+            '(function() {'
+            '  var btn = document.querySelector("[data-name=place-and-modify-button]");'
+            '  if (btn && btn.offsetParent !== null) {'
+            '    btn.click();'
+            '    return "order_placed";'
+            '  }'
+            '  return "place_button_not_found";'
+            '})()'
+        )
+        result3 = self._run_cli("ui", "eval", js_place, timeout=10)
+        if not result3.success:
+            return result3
+        place_result = result3.data.get("result", "")
+        if place_result == "place_button_not_found":
+            return MCPResult(success=False, data={}, error="Place order button not found")
+
+        return MCPResult(success=True, data={"action": side.lower(), "result": "order_placed"})
+
+    def _close_position_via_ui(self) -> MCPResult:
+        """Close position by clicking the close/flatten button, or reversing."""
+        # Try to find a close/flatten button
+        js_close = (
+            '(function() {'
+            '  var btns = document.querySelectorAll("button, [class*=close], [class*=flatten]");'
+            '  for (var i = 0; i < btns.length; i++) {'
+            '    var text = (btns[i].textContent || "").trim();'
+            '    if (/^close|^flatten|close position/i.test(text) && btns[i].offsetParent !== null) {'
+            '      btns[i].click();'
+            '      return "closed: " + text.substring(0, 30);'
+            '    }'
+            '  }'
+            '  return "no_close_button";'
+            '})()'
+        )
+        result = self._run_cli("ui", "eval", js_close, timeout=10)
+        if result.success and result.data.get("result", "").startswith("closed"):
+            return MCPResult(success=True, data={"action": "close", "result": result.data["result"]})
+
+        # Fallback: try the API close
+        result2 = self._run_cli("ui", "eval",
+            'window.TradingViewApi._replayApi.closePosition(); "api_close_called"',
+            timeout=10)
+        return MCPResult(success=True, data={"action": "close", "result": "api_fallback"})
+
 
     # ── Screenshots ──
 
