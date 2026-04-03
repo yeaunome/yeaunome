@@ -223,13 +223,28 @@ class ReplayEngine:
         if "clicked" in str(trade_status):
             time.sleep(1)  # Wait for order panel to render
 
+        # Set quantity/units to match config
+        qty = self.config.contracts
+        qty_result = self.bridge._run_cli(
+            "ui", "eval", f"window._floop.setQuantity({qty})", timeout=8)
+        qty_status = qty_result.data.get("result", "?") if qty_result.success else "failed"
+        self._log_signal("SYSTEM", 0, f"Units → {qty}: {qty_status}")
+        time.sleep(0.3)
+
         # Set replay step to 1m for precise stop/TP management
         # (strategy signals from 5m FLOOP Pro, but we step on 1m bars)
         step_iv = self.config.replay_step_interval
-        step_result = self.bridge._run_cli(
-            "ui", "eval", f"window._floop.setReplayStep('{step_iv}')", timeout=8)
-        step_status = step_result.data.get("result", "?") if step_result.success else "failed"
-        self._log_signal("SYSTEM", 0, f"Replay step → {step_iv}: {step_status}")
+        # Step 1: Click the step interval button to open dropdown
+        open_result = self.bridge._run_cli(
+            "ui", "eval", "window._floop.openStepMenu()", timeout=8)
+        open_status = open_result.data.get("result", "?") if open_result.success else "failed"
+        self._log_signal("SYSTEM", 0, f"Step menu: {open_status}")
+        time.sleep(0.5)
+        # Step 2: Select the target interval from the dropdown
+        sel_result = self.bridge._run_cli(
+            "ui", "eval", f"window._floop.selectStepInterval('{step_iv}')", timeout=8)
+        sel_status = sel_result.data.get("result", "?") if sel_result.success else "failed"
+        self._log_signal("SYSTEM", 0, f"Step interval → {step_iv}: {sel_status}")
         time.sleep(0.5)
 
         # Start TradingView autoplay (fast-forward)

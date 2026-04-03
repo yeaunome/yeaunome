@@ -28,7 +28,7 @@ class TradingConfig:
     flat_tp_pts: float = 10.0  # Take profit in points from entry
 
     # Position sizing
-    contracts: int = 1
+    contracts: int = 10
     max_daily_loss: float = 1200.0  # dollars
     max_daily_trades: int = 20
 

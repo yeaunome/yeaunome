@@ -74,6 +74,43 @@
       return 'not_found_' + side;
     },
 
+    // Set the quantity/units in the order panel
+    setQuantity: function(qty) {
+      var panel = document.querySelector('[class*=orderWidget], [class*=orderTicket], [class*=orderPanel]');
+      var searchIn = panel || document;
+      var inputs = searchIn.querySelectorAll('input');
+      for (var i = 0; i < inputs.length; i++) {
+        var inp = inputs[i];
+        if (!inp.offsetParent) continue;
+        // Find the Units field — small number, often near "Units" label
+        var parent = inp.closest('[class*=row], [class*=field], [class*=group]') || inp.parentElement;
+        var parentText = (parent && parent.textContent) || '';
+        if (/units|qty|quantity|size/i.test(parentText)) {
+          var nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          nativeSet.call(inp, String(qty));
+          inp.dispatchEvent(new Event('input', {bubbles: true}));
+          inp.dispatchEvent(new Event('change', {bubbles: true}));
+          inp.dispatchEvent(new Event('blur', {bubbles: true}));
+          return 'qty_set_' + qty;
+        }
+      }
+      // Fallback: find input with a small integer value (1-99)
+      for (var i = 0; i < inputs.length; i++) {
+        var inp = inputs[i];
+        if (!inp.offsetParent) continue;
+        var val = parseInt(inp.value);
+        if (val > 0 && val < 100) {
+          var nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          nativeSet.call(inp, String(qty));
+          inp.dispatchEvent(new Event('input', {bubbles: true}));
+          inp.dispatchEvent(new Event('change', {bubbles: true}));
+          inp.dispatchEvent(new Event('blur', {bubbles: true}));
+          return 'qty_set_fallback_' + qty;
+        }
+      }
+      return 'qty_input_not_found';
+    },
+
     // Click Market order type
     selectMarket: function() {
       var tabs = document.querySelectorAll('button, [class*=tab]');
@@ -244,46 +281,57 @@
       return this.selectOrderType('Market');
     },
 
-    // Set the replay step interval (e.g., "1m", "5m", "1s")
-    setReplayStep: function(interval) {
-      // Find the step size button in the replay controls bar (bottom)
-      var btns = document.querySelectorAll('button, [class*=button], span');
-      for (var i = 0; i < btns.length; i++) {
-        var el = btns[i];
+    // Step 1: Click the step interval button to open its dropdown/menu
+    openStepMenu: function() {
+      // The replay bar has: play/pause, step, step-forward, 1x speed, "5m" step size, skip-to-end
+      // The "5m" is a clickable button/span in the bottom replay controls area
+      var all = document.querySelectorAll('button, span, div');
+      var candidates = [];
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
         if (!el.offsetParent) continue;
         var text = el.textContent.trim();
-        // Match current step size like "5m", "1m", "1s" in the replay bar
-        if (/^[0-9]+[sm]$/.test(text)) {
+        // Match step sizes: "1s","5s","10s","30s","1m","3m","5m","15m","30m","1h" etc.
+        if (/^[0-9]+[smh]$/.test(text) && el.children.length === 0) {
           var rect = el.getBoundingClientRect();
-          // Must be in the bottom area (replay controls)
-          if (rect.top > window.innerHeight * 0.7) {
-            el.click();
-            // Wait for dropdown, then find the target interval
-            setTimeout(function() {
-              var items = document.querySelectorAll('[class*=menu] [class*=item], [class*=dropdown] span, [class*=popup] span');
-              for (var j = 0; j < items.length; j++) {
-                if (items[j].textContent.trim() === interval && items[j].offsetParent) {
-                  items[j].click();
-                  return;
-                }
-              }
-              // Fallback: search all visible elements
-              var all = document.querySelectorAll('span, div');
-              for (var j = 0; j < all.length; j++) {
-                if (all[j].textContent.trim() === interval && all[j].offsetParent && all[j].children.length === 0) {
-                  var r = all[j].getBoundingClientRect();
-                  if (r.top > window.innerHeight * 0.4) {
-                    all[j].click();
-                    return;
-                  }
-                }
-              }
-            }, 300);
-            return 'step_menu_clicked_' + text;
+          // Must be in the bottom area of the screen (replay controls)
+          if (rect.top > window.innerHeight * 0.65) {
+            candidates.push({el: el, text: text, top: rect.top, tag: el.tagName});
           }
         }
       }
-      return 'step_button_not_found';
+      if (candidates.length === 0) return 'step_btn_not_found';
+      // Click the best candidate (rightmost in the replay bar area)
+      var best = candidates[candidates.length - 1];
+      best.el.click();
+      return 'step_menu_opened:' + best.text + ':' + best.tag;
+    },
+
+    // Step 2: Select an interval from the open dropdown/menu
+    selectStepInterval: function(interval) {
+      // After openStepMenu(), a dropdown/popup should be visible
+      // Search for the target interval text in visible elements
+      var all = document.querySelectorAll('span, div, [class*=item], [role=option], [role=menuitem]');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var text = el.textContent.trim();
+        if (text === interval && el.children.length === 0) {
+          el.click();
+          return 'interval_selected:' + interval;
+        }
+      }
+      // Try with case-insensitive match
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var text = el.textContent.trim();
+        if (text.toLowerCase() === interval.toLowerCase() && el.children.length <= 1) {
+          el.click();
+          return 'interval_selected_fuzzy:' + interval;
+        }
+      }
+      return 'interval_not_found:' + interval;
     },
 
     // Dismiss dialogs (Stay on "Leave current replay?")
