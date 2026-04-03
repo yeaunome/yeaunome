@@ -199,10 +199,14 @@ class ReplayEngine:
                 if not self.start_replay():
                     return False
 
-        # Open the Trade panel (bottom tab) so Buy/Sell are available
+        # Wait for replay UI to settle, then click "Trade" tab at bottom
+        time.sleep(1)
+        self.bridge._ensure_trade_helper_loaded()
         trade_result = self.bridge._ensure_trade_panel_open()
-        self._log_signal("SYSTEM", 0,
-                         f"Trade panel: {trade_result.data.get('result', '?')}")
+        trade_status = trade_result.data.get("result", "?") if trade_result.success else "failed"
+        self._log_signal("SYSTEM", 0, f"Trade panel: {trade_status}")
+        if "clicked" in str(trade_status):
+            time.sleep(1)  # Wait for order panel to render
 
         # Start TradingView autoplay (fast-forward)
         result = self.bridge.replay_autoplay(speed=speed)

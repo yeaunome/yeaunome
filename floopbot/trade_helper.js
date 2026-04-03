@@ -9,59 +9,64 @@
 
 (function() {
   window._floop = {
-    // Click the Trade button to open the order panel
+    // Click the "Trade" tab at the bottom-left (next to "Replay Trading")
     openTradePanel: function() {
-      // Check if order panel with Buy/Sell is actually visible
-      var op = document.querySelector('[class*=orderWidget], [class*=orderTicket]');
-      if (op && op.offsetParent) {
-        // Verify it actually has Buy/Sell text
-        var text = op.textContent || '';
-        if (/Buy.*Sell|Sell.*Buy/i.test(text)) return 'already_open';
+      // Check if order panel with Sell/Buy is already visible
+      var panel = document.querySelector('[class*=orderWidget], [class*=orderTicket], [class*=orderPanel]');
+      if (panel && panel.offsetParent) {
+        var text = panel.textContent || '';
+        if (/Sell.*Buy|Buy.*Sell/i.test(text)) return 'already_open';
       }
-      // Try the top-right Trade button in the header
-      var topBtns = document.querySelectorAll('button, [class*=button]');
-      for (var i = 0; i < topBtns.length; i++) {
-        var b = topBtns[i];
-        if (!b.offsetParent) continue;
-        var text = (b.textContent || '').trim();
-        var dataName = b.getAttribute('data-name') || '';
-        if (dataName === 'trading-floating-toolbar' ||
-            (text === 'Trade' && b.closest('[class*=header], [class*=toolbar], [id*=header]'))) {
-          b.click();
-          return 'top_trade_clicked';
+      // Find the "Trade" tab near "Replay Trading" text
+      // Search all visible elements with text "Trade"
+      var all = document.querySelectorAll('button, div, span, a');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var text = (el.textContent || '').trim();
+        // Must be exactly "Trade" and near "Replay Trading"
+        if (text === 'Trade') {
+          // Check if a sibling or nearby element says "Replay Trading"
+          var parent = el.parentElement;
+          if (parent && /Replay Trading/i.test(parent.textContent)) {
+            el.click();
+            return 'trade_tab_clicked';
+          }
+          // Also check grandparent
+          var gp = parent ? parent.parentElement : null;
+          if (gp && /Replay Trading/i.test(gp.textContent)) {
+            el.click();
+            return 'trade_tab_clicked_gp';
+          }
         }
       }
-      // Fallback: find any visible "Trade" button that's NOT in the bottom bar
-      var bottom = document.querySelector('[class*=bottom-widgetbar], [class*="layout__area--bottom"]');
-      for (var i = 0; i < topBtns.length; i++) {
-        var b = topBtns[i];
-        if (!b.offsetParent) continue;
-        if (bottom && bottom.contains(b)) continue;
-        if (/^Trade$/i.test((b.textContent || '').trim())) {
-          b.click();
-          return 'trade_button_clicked';
-        }
-      }
-      return 'trade_not_found';
+      return 'trade_tab_not_found';
     },
 
     // Select Buy or Sell side in the order panel
     selectSide: function(side) {
-      var containers = document.querySelectorAll('[class*=order], [class*=trading], [class*=ticket]');
-      for (var c = 0; c < containers.length; c++) {
-        var els = containers[c].querySelectorAll('span, div, button, a');
-        for (var i = 0; i < els.length; i++) {
-          var e = els[i];
-          if (!e.offsetParent) continue;
-          var text = (e.textContent || '').trim();
-          if (new RegExp('^' + side + '$', 'i').test(text) && e.children.length === 0) {
-            e.click();
-            return 'selected_' + side;
-          }
-          if (new RegExp('^' + side + '[0-9,. ]', 'i').test(text) && e.children.length <= 2) {
-            e.click();
-            return 'selected_' + side + '_with_price';
-          }
+      // Look in the right-side trading panel area
+      var panel = document.querySelector('[class*=tradingpanel], [class*=orderWidget], [class*=orderTicket], [class*=orderPanel]');
+      var searchIn = panel || document;
+      var els = searchIn.querySelectorAll('span, div, button, a');
+      for (var i = 0; i < els.length; i++) {
+        var e = els[i];
+        if (!e.offsetParent) continue;
+        var text = (e.textContent || '').trim();
+        // Match exact "Buy" or "Sell" with no children (leaf text node)
+        if (new RegExp('^' + side + '$', 'i').test(text) && e.children.length === 0) {
+          e.click();
+          return 'selected_' + side;
+        }
+      }
+      // Second pass: match "Buy" or "Sell" followed by price like "Buy15,159.75"
+      for (var i = 0; i < els.length; i++) {
+        var e = els[i];
+        if (!e.offsetParent) continue;
+        var text = (e.textContent || '').trim();
+        if (new RegExp('^' + side + '[\\s0-9,.]', 'i').test(text) && e.children.length <= 3) {
+          e.click();
+          return 'selected_' + side + '_price';
         }
       }
       return 'not_found_' + side;
@@ -79,12 +84,30 @@
       return 'market_not_found';
     },
 
-    // Click Place Order button
+    // Click Place Order button (the big "Buy 5 MNQ1! MARKET" button)
     placeOrder: function() {
+      // Try data-name first
       var btn = document.querySelector('[data-name=place-and-modify-button]');
       if (btn && btn.offsetParent) {
         btn.click();
         return 'order_placed';
+      }
+      // Fallback: find button with "MARKET" text in the trading panel
+      var btns = document.querySelectorAll('button');
+      for (var i = 0; i < btns.length; i++) {
+        var text = (btns[i].textContent || '').trim();
+        if (/MARKET/i.test(text) && /Buy|Sell/i.test(text) && btns[i].offsetParent) {
+          btns[i].click();
+          return 'order_placed_market_btn';
+        }
+      }
+      // Try "Start creating order" button
+      for (var i = 0; i < btns.length; i++) {
+        var text = (btns[i].textContent || '').trim();
+        if (/start creating|place order|submit/i.test(text) && btns[i].offsetParent) {
+          btns[i].click();
+          return 'order_placed_submit';
+        }
       }
       return 'place_button_not_found';
     },
