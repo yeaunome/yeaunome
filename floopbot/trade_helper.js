@@ -587,53 +587,85 @@
       return 'interval_not_found:' + interval;
     },
 
-    // Click "Random Bar" button in the replay date selector
-    clickRandomBar: function() {
-      // After entering replay mode, TradingView shows date selection with options
-      // including "Select first available date" and a shuffle/random icon
-      var all = document.querySelectorAll('button, div, span, [class*=button]');
+    // Step 1 of Random Bar: Open the "SELECT STARTING POINT" dropdown
+    // by clicking the "Select first available date" text/button at bottom of replay bar
+    openStartingPointDropdown: function() {
+      var all = document.querySelectorAll('button, div, span, [class*=button], [role=button]');
+      // First try: find exact "Select first available date" text
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
         if (!el.offsetParent) continue;
         var text = (el.textContent || '').trim();
-        // Look for "Random" text or shuffle-like button
-        if (/random|shuffle/i.test(text)) {
+        if (/select first available date/i.test(text)) {
           el.click();
-          return 'random_bar_clicked:text';
-        }
-        // Check aria-label and title attributes
-        var label = el.getAttribute('aria-label') || el.getAttribute('title') || '';
-        if (/random|shuffle/i.test(label)) {
-          el.click();
-          return 'random_bar_clicked:aria';
+          return 'dropdown_opened:first_available';
         }
       }
-      // Look for the shuffle/dice icon button — it's often an SVG icon button
-      // near the replay controls in the middle of the screen
-      var buttons = document.querySelectorAll('button');
-      for (var i = 0; i < buttons.length; i++) {
-        var btn = buttons[i];
-        if (!btn.offsetParent) continue;
-        var rect = btn.getBoundingClientRect();
-        // Should be in the middle area of the screen (replay date picker)
-        if (rect.top < window.innerHeight * 0.3 || rect.top > window.innerHeight * 0.7) continue;
-        if (rect.left < window.innerWidth * 0.2 || rect.left > window.innerWidth * 0.8) continue;
-        // Check for SVG inside (icon button)
-        var svg = btn.querySelector('svg');
-        var dataName = btn.getAttribute('data-name') || '';
-        if (svg && /random|shuffle|dice/i.test(dataName)) {
-          btn.click();
-          return 'random_bar_clicked:data-name:' + dataName;
+      // Second try: find "Random bar" text already visible (dropdown already open)
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var text = (el.textContent || '').trim();
+        if (/^random bar$/i.test(text)) {
+          return 'dropdown_already_open';
         }
       }
-      // Fallback: look for any button with a data-name containing 'random' or 'jump'
+      // Third try: find any element with "select" and "date" in text near bottom
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var rect = el.getBoundingClientRect();
+        if (rect.top < window.innerHeight * 0.5) continue;
+        var text = (el.textContent || '').trim();
+        if (/select.*date|starting point/i.test(text)) {
+          el.click();
+          return 'dropdown_opened:' + text.substring(0, 30);
+        }
+      }
+      // Fourth try: find clickable element with data-name related to replay start point
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
         if (!el.offsetParent) continue;
         var dn = el.getAttribute('data-name') || '';
-        if (/random|jump.*random|shuffle/i.test(dn)) {
+        if (/start.*point|date.*select|replay.*pick/i.test(dn)) {
           el.click();
-          return 'random_bar_clicked:dn:' + dn;
+          return 'dropdown_opened:dn:' + dn;
+        }
+      }
+      return 'dropdown_not_found';
+    },
+
+    // Step 2 of Random Bar: Click "Random bar" in the open dropdown
+    clickRandomBar: function() {
+      var all = document.querySelectorAll('button, div, span, [class*=item], [role=option], [role=menuitem], [class*=button], [role=button]');
+      // Look for "Random bar" text
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var text = (el.textContent || '').trim();
+        if (/^random bar$/i.test(text)) {
+          el.click();
+          return 'random_bar_clicked:exact';
+        }
+      }
+      // Broader match: contains "random"
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var text = (el.textContent || '').trim();
+        if (/random/i.test(text) && text.length < 30) {
+          el.click();
+          return 'random_bar_clicked:' + text;
+        }
+      }
+      // Check aria-label, title, data-name
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var label = (el.getAttribute('aria-label') || '') + (el.getAttribute('title') || '') + (el.getAttribute('data-name') || '');
+        if (/random/i.test(label)) {
+          el.click();
+          return 'random_bar_clicked:attr:' + label.substring(0, 30);
         }
       }
       return 'random_bar_not_found';

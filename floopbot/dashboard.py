@@ -192,69 +192,104 @@ class ReplayEngine:
 
     def run_backtest(self, speed: int = 0):
         """
-        One-click backtest setup. Follows exact TradingView sequence:
+        One-click backtest setup. ALWAYS runs full TradingView sequence:
         1. Replay Mode
-        2. 1m timeframe (so date selector has 1m granularity)
-        3. Select first available date
-        4. 5m timeframe (for FLOOP Pro signals)
+        2. 1m timeframe (top left)
+        3. Random Bar
+        4. 5m timeframe (top left, for FLOOP Pro signals)
         5. Update replay step interval to 1m
         6. Trade button → set contracts
         7. Start autoplay + monitoring
         """
         self.armed = True
-        self.bridge._ensure_trade_helper_loaded()
+        self.bridge._ensure_trade_helper_loaded(force=True)
         self.bridge.dismiss_dialogs()
         step_iv = self.config.replay_step_interval
 
-        # Check if already in replay
+        # Stop any existing replay first
         status = self.bridge.replay_status()
-        already_in_replay = (status.success and status.data.get("is_replay_started"))
-
-        if already_in_replay:
-            self.replay_active = True
-            self._log_signal("SYSTEM", 0, "Replay already running — skipping setup")
-        else:
-            # ── Step 1: Enter Replay Mode ──
-            self._log_signal("SYSTEM", 0, "1/6 Entering replay mode...")
-            self.bridge._run_cli("ui", "eval",
-                "document.querySelector('[data-name=\"replay\"]') && "
-                "document.querySelector('[data-name=\"replay\"]').click()",
-                timeout=8)
+        if status.success and status.data.get("is_replay_started"):
+            self._log_signal("SYSTEM", 0, "Stopping existing replay...")
+            self.bridge.replay_stop()
             time.sleep(1)
+            self.bridge.dismiss_dialogs()
+            time.sleep(0.5)
 
-            # ── Step 2: Switch to 1m timeframe (top left) ──
-            self._log_signal("SYSTEM", 0, "2/6 Setting 1m timeframe...")
-            self.bridge.set_timeframe("1")
-            time.sleep(1)
+        # ── Step 1: Enter Replay Mode ──
+        self._log_signal("SYSTEM", 0, "1/6 Entering replay mode...")
+        # Click the Replay button at the top
+        replay_js = """
+        (function() {
+            var btns = document.querySelectorAll('button, [data-name]');
+            for (var i = 0; i < btns.length; i++) {
+                var dn = btns[i].getAttribute('data-name') || '';
+                if (/replay/i.test(dn) && btns[i].offsetParent) {
+                    btns[i].click();
+                    return 'replay_btn_clicked:' + dn;
+                }
+            }
+            // Fallback: find button with "Replay" text
+            for (var i = 0; i < btns.length; i++) {
+                if (!btns[i].offsetParent) continue;
+                var text = (btns[i].textContent || '').trim();
+                if (/^Replay$/i.test(text)) {
+                    btns[i].click();
+                    return 'replay_text_clicked';
+                }
+            }
+            return 'replay_not_found';
+        })()
+        """
+        r = self.bridge._run_cli("ui", "eval", replay_js, timeout=8)
+        self._log_signal("SYSTEM", 0, f"  {r.data.get('result', r.error) if r.success else r.error}")
+        time.sleep(1.5)
 
-            # ── Step 3: Click "Random Bar" to start at random position ──
-            self._log_signal("SYSTEM", 0, "3/6 Clicking Random Bar...")
-            # Probe the replay picker to see what buttons are available
+        # ── Step 2: Switch to 1m timeframe (top left) ──
+        self._log_signal("SYSTEM", 0, "2/6 Setting 1m timeframe...")
+        self.bridge.set_timeframe("1")
+        time.sleep(1.5)
+
+        # ── Step 3: Click "Random Bar" (two-step: open dropdown, then click) ──
+        self._log_signal("SYSTEM", 0, "3/6 Selecting Random Bar...")
+
+        # Step 3a: Open the "SELECT STARTING POINT" dropdown
+        dropdown_result = self.bridge._run_cli("ui", "eval",
+            "window._floop.openStartingPointDropdown()", timeout=8)
+        dropdown_status = dropdown_result.data.get("result", "?") if dropdown_result.success else "failed"
+        self._log_signal("SYSTEM", 0, f"  Dropdown: {dropdown_status}")
+        time.sleep(1.0)  # Wait for dropdown to appear
+
+        # Step 3b: Click "Random bar" from the dropdown
+        random_result = self.bridge._run_cli("ui", "eval",
+            "window._floop.clickRandomBar()", timeout=8)
+        random_status = random_result.data.get("result", "?") if random_result.success else "failed"
+        self._log_signal("SYSTEM", 0, f"  Random bar: {random_status}")
+
+        if "not_found" in str(random_status):
+            # Probe what's visible for debugging
             probe = self.bridge._run_cli("ui", "eval",
                 "window._floop.probeReplayPicker()", timeout=8)
             probe_data = probe.data.get("result", "?") if probe.success else probe.error
-            self._log_signal("DEBUG", 0, f"Replay picker: {str(probe_data)[:300]}")
+            self._log_signal("DEBUG", 0, f"Picker buttons: {str(probe_data)[:300]}")
 
-            random_result = self.bridge._run_cli("ui", "eval",
-                "window._floop.clickRandomBar()", timeout=8)
-            random_status = random_result.data.get("result", "?") if random_result.success else "failed"
-            self._log_signal("SYSTEM", 0, f"  Random bar: {random_status}")
+            # Last resort: use replay start API
+            self._log_signal("SYSTEM", 0, "  Random Bar not found — using API start")
+            self.start_replay()
 
-            if "not_found" in str(random_status):
-                # Fallback: use replay start (select first available date)
-                self._log_signal("SYSTEM", 0, "  Fallback: selecting first available date...")
-                if not self.start_replay():
-                    self.bridge.dismiss_dialogs()
-                    time.sleep(1)
-                    if not self.start_replay():
-                        return False
-            self.replay_active = True
-            time.sleep(1.5)
+        self.replay_active = True
+        time.sleep(3)  # Extra wait for chart to load after random bar selection
 
-            # ── Step 4: Switch to 5m timeframe (for FLOOP Pro signals) ──
-            self._log_signal("SYSTEM", 0, "4/6 Setting 5m timeframe for FLOOP Pro...")
-            self.bridge.set_timeframe(self.config.timeframe)
-            time.sleep(1)
+        # ── Step 4: Switch to 5m timeframe (for FLOOP Pro signals) ──
+        self._log_signal("SYSTEM", 0, f"4/6 Setting {self.config.timeframe}m timeframe for FLOOP Pro...")
+        self.bridge.dismiss_dialogs()
+        time.sleep(0.3)
+        tf_result = self.bridge.set_timeframe(self.config.timeframe)
+        tf_status = tf_result.data if tf_result.success else tf_result.error
+        self._log_signal("SYSTEM", 0, f"  Timeframe → {self.config.timeframe}m: {tf_status}")
+        time.sleep(2)
+        # Retry once if it didn't take (dialog might have intercepted)
+        self.bridge.dismiss_dialogs()
+        time.sleep(0.3)
 
         # ── Step 5: Update replay step interval to 1m ──
         self._log_signal("SYSTEM", 0, f"5/6 Setting replay step to {step_iv}...")
