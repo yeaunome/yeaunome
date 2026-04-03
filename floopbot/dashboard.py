@@ -52,6 +52,7 @@ class ReplayEngine:
 
         # Current data
         self.last_price = 0.0
+        self.last_bar_time = ""
         self.last_quote = {}
         self.last_signal: Optional[FloopSignal] = None
         self.position_side = "FLAT"
@@ -433,6 +434,7 @@ class ReplayEngine:
         high = quote.data.get("high", self.last_price)
         low = quote.data.get("low", self.last_price)
         bar_time = str(quote.data.get("time", ""))
+        self.last_bar_time = bar_time
 
         if self.last_price <= 0:
             return
@@ -660,8 +662,13 @@ class ReplayEngine:
         self._tp_price = tp_price
         self._sl_price = stop_price
 
+        # Probe the position bar to see what TP/SL elements look like
+        time.sleep(1.0)  # wait for position bar to render
+        probe = self.bridge._run_cli("ui", "eval", "window._floop.probePositionBar()", timeout=8)
+        probe_data = probe.data.get("result", "?") if probe.success else probe.error
+        self._log_signal("DEBUG", 0, f"Position bar probe: {str(probe_data)[:200]}")
+
         # Click TP button on the position bar, then set price
-        time.sleep(0.8)  # wait for position bar to render
         tp_click = self.bridge._run_cli("ui", "eval", "window._floop.clickPositionTP()", timeout=8)
         tp_click_status = tp_click.data.get("result", "") if tp_click.success else tp_click.error
         self._log_signal("TP", tp_price, f"TP button: {tp_click_status}")

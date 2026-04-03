@@ -283,6 +283,39 @@
       return 'price_set_' + price;
     },
 
+    // Probe the position bar to find TP/SL buttons and report DOM structure
+    probePositionBar: function() {
+      var results = [];
+      var all = document.querySelectorAll('*');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var text = (el.textContent || '').trim();
+        // Look for elements containing TP or SL
+        if (!/^(TP|SL)$/i.test(text) && text.length > 5) continue;
+        if (text.length === 0) continue;
+        if (text !== 'TP' && text !== 'SL' && text.length > 4) continue;
+        var rect = el.getBoundingClientRect();
+        if (rect.width < 5 || rect.height < 5) continue;
+        if (rect.left > window.innerWidth * 0.8) continue;
+        results.push({
+          text: text,
+          tag: el.tagName,
+          cls: (typeof el.className === 'string' ? el.className.substring(0, 60) : ''),
+          id: el.id || '',
+          dataName: el.getAttribute('data-name') || '',
+          role: el.getAttribute('role') || '',
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+          x: Math.round(rect.left),
+          y: Math.round(rect.top),
+          kids: el.children.length,
+          parent: el.parentElement ? el.parentElement.tagName + '.' + (typeof el.parentElement.className === 'string' ? el.parentElement.className.substring(0, 40) : '') : ''
+        });
+      }
+      return JSON.stringify(results);
+    },
+
     // Click the TP button on the position bar (appears after entering a trade)
     clickPositionTP: function() {
       return this._clickPositionButton('TP');
@@ -295,32 +328,43 @@
 
     // Generic: find and click a button on the chart position bar
     _clickPositionButton: function(label) {
-      // Strategy 1: Search ALL visible elements for exact text match
       var all = document.querySelectorAll('*');
       var candidates = [];
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
         if (!el.offsetParent) continue;
-        // Must be leaf or near-leaf with exact text
-        var text = el.textContent.trim();
+        var text = (el.textContent || '').trim();
         if (text !== label) continue;
-        // Prefer elements with no children or only text children
-        if (el.children.length > 2) continue;
         var rect = el.getBoundingClientRect();
-        // Must be on the chart (not in sidepanel), not too small
-        if (rect.width < 10 || rect.height < 10) continue;
-        if (rect.left > window.innerWidth * 0.75) continue; // not in order panel
-        candidates.push({el: el, rect: rect, tag: el.tagName, cls: el.className});
+        if (rect.width < 5 || rect.height < 5) continue;
+        if (rect.left > window.innerWidth * 0.8) continue;
+        candidates.push({
+          el: el, rect: rect, tag: el.tagName,
+          cls: typeof el.className === 'string' ? el.className : '',
+          kids: el.children.length,
+          area: rect.width * rect.height
+        });
       }
-      if (candidates.length === 0) return label.toLowerCase() + '_not_found_0_candidates';
+      if (candidates.length === 0) return label.toLowerCase() + '_not_found';
 
-      // Click the best candidate — prefer ones with smaller bounding box (more specific)
-      candidates.sort(function(a, b) {
-        return (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height);
-      });
-      var best = candidates[0];
-      best.el.click();
-      return label.toLowerCase() + '_clicked:' + best.tag + ':' + (typeof best.cls === 'string' ? best.cls.substring(0, 30) : '');
+      // Sort: prefer smallest (most specific leaf) element
+      candidates.sort(function(a, b) { return a.area - b.area; });
+
+      // Try clicking each candidate until one works
+      for (var c = 0; c < candidates.length; c++) {
+        var cand = candidates[c];
+        // Try click
+        cand.el.click();
+        // Also try mousedown+mouseup for elements that use those
+        cand.el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+        cand.el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true}));
+        cand.el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true}));
+        cand.el.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, cancelable: true}));
+
+        return label.toLowerCase() + '_clicked:' + cand.tag + ':kids=' + cand.kids +
+          ':' + cand.cls.substring(0, 40) + ':' + Math.round(cand.rect.left) + ',' + Math.round(cand.rect.top);
+      }
+      return label.toLowerCase() + '_not_found';
     },
 
     // Set the price on a TP/SL input that appears after clicking TP or SL
