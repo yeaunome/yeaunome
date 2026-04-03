@@ -228,6 +228,9 @@ class TVBridge:
 
         if panel_status not in ("already_open",):
             time.sleep(0.8)  # Wait for panel to render
+            # Dismiss "Leave replay?" dialog if it appeared
+            self._run_cli("ui", "eval", "window._floop.dismissDialog()", timeout=5)
+            time.sleep(0.3)
 
         # Step 2: Select side
         side_fn = "Buy" if side == "Buy" else "Sell"

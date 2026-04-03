@@ -9,22 +9,40 @@
 
 (function() {
   window._floop = {
-    // Click the Trade tab in the bottom bar
+    // Click the Trade button to open the order panel
     openTradePanel: function() {
-      // Check if order panel is already open
-      var op = document.querySelector('[class*=orderWidget], [class*=orderTicket], [class*=orderPanel]');
-      if (op && op.offsetParent) return 'already_open';
-      // Find Trade tab in bottom bar only
-      var bottom = document.querySelector('[class*=bottom-widgetbar], [class*="layout__area--bottom"]');
-      if (!bottom) return 'no_bottom_bar';
-      var tabs = bottom.querySelectorAll('button, [class*=tab], [role=tab]');
-      for (var i = 0; i < tabs.length; i++) {
-        if (/^Trade$/i.test(tabs[i].textContent.trim()) && tabs[i].offsetParent) {
-          tabs[i].click();
-          return 'trade_tab_clicked';
+      // Check if order panel with Buy/Sell is actually visible
+      var op = document.querySelector('[class*=orderWidget], [class*=orderTicket]');
+      if (op && op.offsetParent) {
+        // Verify it actually has Buy/Sell text
+        var text = op.textContent || '';
+        if (/Buy.*Sell|Sell.*Buy/i.test(text)) return 'already_open';
+      }
+      // Try the top-right Trade button in the header
+      var topBtns = document.querySelectorAll('button, [class*=button]');
+      for (var i = 0; i < topBtns.length; i++) {
+        var b = topBtns[i];
+        if (!b.offsetParent) continue;
+        var text = (b.textContent || '').trim();
+        var dataName = b.getAttribute('data-name') || '';
+        if (dataName === 'trading-floating-toolbar' ||
+            (text === 'Trade' && b.closest('[class*=header], [class*=toolbar], [id*=header]'))) {
+          b.click();
+          return 'top_trade_clicked';
         }
       }
-      return 'trade_tab_not_found';
+      // Fallback: find any visible "Trade" button that's NOT in the bottom bar
+      var bottom = document.querySelector('[class*=bottom-widgetbar], [class*="layout__area--bottom"]');
+      for (var i = 0; i < topBtns.length; i++) {
+        var b = topBtns[i];
+        if (!b.offsetParent) continue;
+        if (bottom && bottom.contains(b)) continue;
+        if (/^Trade$/i.test((b.textContent || '').trim())) {
+          b.click();
+          return 'trade_button_clicked';
+        }
+      }
+      return 'trade_not_found';
     },
 
     // Select Buy or Sell side in the order panel
