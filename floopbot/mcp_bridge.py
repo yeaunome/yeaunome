@@ -192,24 +192,52 @@ class TVBridge:
             return MCPResult(success=False, data={}, error=f"Unknown action: {action}")
 
     def _ensure_trade_panel_open(self):
-        """Click the 'Trade' tab at the bottom to open the order panel."""
+        """Click the 'Trade' tab at the BOTTOM of TradingView to open the order panel.
+
+        Must be careful NOT to click the top-right 'Trade' button which
+        opens broker connection and can trigger 'Leave replay?' dialog.
+        """
         js_open_trade = (
             '(function() {'
-            '  var tabs = document.querySelectorAll("button, [class*=tab], [class*=buttonTab]");'
-            '  for (var i = 0; i < tabs.length; i++) {'
-            '    var text = (tabs[i].textContent || "").trim();'
-            '    if (/^Trade$/i.test(text) && tabs[i].offsetParent !== null) {'
-            '      tabs[i].click();'
-            '      return "trade_panel_opened";'
+            '  // First check if order panel is already visible'
+            '  var orderPanel = document.querySelector("[class*=orderWidget], [class*=orderTicket], [class*=orderPanel]");'
+            '  if (orderPanel && orderPanel.offsetParent) return "already_open";'
+            '  // Find the Trade tab in the BOTTOM widget bar only'
+            '  var bottomBar = document.querySelector("[class*=bottom-widgetbar], [class*=layout__area--bottom]");'
+            '  if (bottomBar) {'
+            '    var tabs = bottomBar.querySelectorAll("button, [class*=tab], [role=tab]");'
+            '    for (var i = 0; i < tabs.length; i++) {'
+            '      var text = (tabs[i].textContent || "").trim();'
+            '      if (/^Trade$/i.test(text) && tabs[i].offsetParent !== null) {'
+            '        tabs[i].click();'
+            '        return "trade_tab_clicked";'
+            '      }'
             '    }'
             '  }'
             '  return "trade_tab_not_found";'
             '})()'
         )
         result = self._run_cli("ui", "eval", js_open_trade, timeout=10)
-        if result.success:
+        if result.success and result.data.get("result") != "already_open":
             time.sleep(0.5)
         return result
+
+    def dismiss_dialogs(self):
+        """Dismiss any popup dialogs like 'Leave current replay?'"""
+        js_dismiss = (
+            '(function() {'
+            '  var btns = document.querySelectorAll("button");'
+            '  for (var i = 0; i < btns.length; i++) {'
+            '    var text = (btns[i].textContent || "").trim();'
+            '    if (/^Stay$/i.test(text) && btns[i].offsetParent !== null) {'
+            '      btns[i].click();'
+            '      return "dismissed_stay";'
+            '    }'
+            '  }'
+            '  return "no_dialog";'
+            '})()'
+        )
+        return self._run_cli("ui", "eval", js_dismiss, timeout=5)
 
     def _place_order_via_ui(self, side: str) -> MCPResult:
         """Select side, switch to Market, click Place Order."""

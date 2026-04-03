@@ -182,23 +182,34 @@ class ReplayEngine:
         # Arm the bot
         self.armed = True
 
+        # Dismiss any lingering dialogs
+        self.bridge.dismiss_dialogs()
+
         # Check if we're already in replay mode
         status = self.bridge.replay_status()
         already_in_replay = (status.success and status.data.get("is_replay_started"))
         if already_in_replay:
             self.replay_active = True
-            self._log_signal("SYSTEM", 0, "Replay mode detected — already running")
+            self._log_signal("SYSTEM", 0, "Replay already running")
         else:
             self._log_signal("SYSTEM", 0, "Starting replay mode...")
             if not self.start_replay():
-                return False
+                self.bridge.dismiss_dialogs()
+                time.sleep(1)
+                if not self.start_replay():
+                    return False
+
+        # Open the Trade panel (bottom tab) so Buy/Sell are available
+        trade_result = self.bridge._ensure_trade_panel_open()
+        self._log_signal("SYSTEM", 0,
+                         f"Trade panel: {trade_result.data.get('result', '?')}")
 
         # Start TradingView autoplay (fast-forward)
         result = self.bridge.replay_autoplay(speed=speed)
         if result.success:
             self._log_signal("SYSTEM", 0, f"Autoplay started (speed={speed})")
         else:
-            self._log_signal("SYSTEM", 0, f"Autoplay failed: {result.error} — try pressing play manually")
+            self._log_signal("SYSTEM", 0, f"Autoplay failed: {result.error} — press play manually")
 
         # Start monitoring loop
         self.start_loop()
