@@ -25,6 +25,7 @@ class TradingConfig:
     atr_stop_multiplier: float = 1.5
     trail_distance_atr: float = 1.0
     trail_mode: str = "adaptive"  # "adaptive" or "fixed"
+    flat_tp_pts: float = 10.0  # Take profit in points from entry
 
     # Position sizing
     contracts: int = 1

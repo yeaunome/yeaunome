@@ -53,6 +53,7 @@ class Position:
     contracts: int = 0
     stop_price: float = 0.0
     trail_price: float = 0.0
+    tp_price: float = 0.0  # take profit price
     atr_at_entry: float = 0.0
     signal_strength: int = 0
     bars_held: int = 0
@@ -226,6 +227,10 @@ class PaperTrader:
             else:
                 self.position.high_water = min(self.position.high_water, low)
 
+        # Check take profit
+        if self._check_tp(high, low):
+            return self._close_position(self.position.tp_price, bar_time, "take_profit")
+
         # Check hard stop
         if self._check_stop(high, low):
             return self._close_position(self.position.stop_price, bar_time, "stop_loss")
@@ -245,14 +250,17 @@ class PaperTrader:
         return None
 
     def _open_position(self, side: PositionSide, price: float, bar_time: str, signal: FloopSignal):
-        """Open a new position."""
+        """Open a new position with SL and TP (mirrors real Floopbot)."""
         atr = signal.atr if signal.atr > 0 else 0.0
         stop_distance = atr * self.config.atr_stop_multiplier if atr > 0 else 0.0
+        tp_pts = getattr(self.config, 'flat_tp_pts', 10.0)
 
         if side == PositionSide.LONG:
             stop = price - stop_distance if stop_distance > 0 else 0.0
+            tp = price + tp_pts if tp_pts > 0 else 0.0
         else:
             stop = price + stop_distance if stop_distance > 0 else 0.0
+            tp = price - tp_pts if tp_pts > 0 else 0.0
 
         self.position = Position(
             side=side,
@@ -261,6 +269,7 @@ class PaperTrader:
             contracts=self.config.contracts,
             stop_price=stop,
             trail_price=0.0,  # trail activates after some favorable movement
+            tp_price=tp,
             atr_at_entry=atr,
             signal_strength=signal.signal_strength,
             high_water=price,
@@ -307,6 +316,16 @@ class PaperTrader:
         # Reset position
         self.position = Position()
         return trade
+
+    def _check_tp(self, high: float, low: float) -> bool:
+        """Check if take profit was hit."""
+        if self.position.tp_price <= 0:
+            return False
+        if self.is_long and high >= self.position.tp_price:
+            return True
+        if self.is_short and low <= self.position.tp_price:
+            return True
+        return False
 
     def _check_stop(self, high: float, low: float) -> bool:
         """Check if hard stop was hit."""

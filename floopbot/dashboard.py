@@ -59,6 +59,8 @@ class ReplayEngine:
         self.tv_position = None
         self.tv_pnl = 0.0
         self.table_data = {}
+        self._tp_price = 0.0
+        self._sl_price = 0.0
         self.signal_log = []  # last 50 signals
         self.trade_log = []  # last 50 trades
         self.errors = []
@@ -82,6 +84,7 @@ class ReplayEngine:
             "position_entry": self.position_entry,
             "stop_price": round(self.paper.position.stop_price, 2),
             "trail_price": round(self.paper.position.trail_price, 2),
+            "tp_price": round(self._tp_price, 2),
             "atr_at_entry": round(self.paper.position.atr_at_entry, 4),
             "bars_held": self.paper.position.bars_held,
             "high_water": round(self.paper.position.high_water, 2),
@@ -104,6 +107,7 @@ class ReplayEngine:
             "symbol": self.config.symbol,
             "timeframe": self.config.timeframe,
             "atr_stop_multiplier": self.config.atr_stop_multiplier,
+            "flat_tp_pts": self.config.flat_tp_pts,
             "trail_distance_atr": self.config.trail_distance_atr,
             "trail_mode": self.config.trail_mode,
             "min_signal_strength": self.config.min_signal_strength,
@@ -491,18 +495,57 @@ class ReplayEngine:
         time.sleep(0.3)  # wait for fill
         quote = self.bridge.get_quote()
         if quote.success:
-            # Use the bid/ask midpoint or last price as best estimate of fill
             return quote.data.get("close", 0) or quote.data.get("last", 0)
         return 0.0
 
+    def _place_exit_orders(self, fill_price: float, atr: float, side: str):
+        """
+        Place SL + TP orders in TradingView after market entry.
+        Mirrors real Floopbot: Hard Stop (ATR×1.5), TP (flat 10pts).
+        Trailing stop managed internally by paper_trader.
+        """
+        stop_dist = atr * self.config.atr_stop_multiplier
+        tp_pts = self.config.flat_tp_pts
+
+        if side == "LONG":
+            stop_price = round(fill_price - stop_dist, 2)
+            tp_price = round(fill_price + tp_pts, 2)
+            exit_side = "Sell"
+        else:
+            stop_price = round(fill_price + stop_dist, 2)
+            tp_price = round(fill_price - tp_pts, 2)
+            exit_side = "Buy"
+
+        self._tp_price = tp_price
+        self._sl_price = stop_price
+
+        # Place Stop Loss order
+        time.sleep(0.5)
+        sl_js = f"window._floop.placeStopOrder('{exit_side}', {stop_price})"
+        sl_result = self.bridge._run_cli("ui", "eval", sl_js, timeout=10)
+        sl_status = sl_result.data.get("result", "") if sl_result.success else sl_result.error
+        self._log_signal("SL", stop_price,
+                         f"Stop {exit_side} @ {stop_price:.2f} ({self.config.atr_stop_multiplier}×ATR) → {sl_status}")
+
+        # Place Take Profit order
+        time.sleep(0.5)
+        tp_js = f"window._floop.placeLimitOrder('{exit_side}', {tp_price})"
+        tp_result = self.bridge._run_cli("ui", "eval", tp_js, timeout=10)
+        tp_status = tp_result.data.get("result", "") if tp_result.success else tp_result.error
+        self._log_signal("TP", tp_price,
+                         f"Limit {exit_side} @ {tp_price:.2f} (+{tp_pts}pts) → {tp_status}")
+
+        # Reset order panel back to Market for next trade
+        time.sleep(0.3)
+        self.bridge._run_cli("ui", "eval", "window._floop.resetToMarket()", timeout=5)
+
     def _execute_buy(self, signal: FloopSignal, price: float, bar_time: str):
-        """Execute a buy in TradingView replay and track internally."""
+        """Execute a buy in TradingView replay with SL+TP, matching Floopbot strategy."""
         was_autoplaying = self._pause_autoplay()
         result = self.bridge.replay_trade("buy")
         self._log_signal("DEBUG", price,
                          f"replay_trade(buy) → success={result.success} data={result.data} err={result.error}")
         if result.success:
-            # Get a more accurate fill price after execution
             fill_price = self._get_tv_fill_price() or price
             if abs(fill_price - price) > 0.5:
                 self._log_signal("DEBUG", fill_price,
@@ -515,6 +558,10 @@ class ReplayEngine:
             self._log_signal("BUY", fill_price,
                              f"Long @ {fill_price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
                              else f"Long @ {fill_price:.2f} | NO ATR — no stop set!")
+
+            # Place SL + TP exit orders in TradingView (like real Floopbot)
+            if atr > 0:
+                self._place_exit_orders(fill_price, atr, "LONG")
             self._draw_stop_lines()
         else:
             self.errors.append(f"Buy failed: {result.error}")
@@ -523,7 +570,7 @@ class ReplayEngine:
             self._resume_autoplay()
 
     def _execute_sell(self, signal: FloopSignal, price: float, bar_time: str):
-        """Execute a sell in TradingView replay and track internally."""
+        """Execute a sell in TradingView replay with SL+TP, matching Floopbot strategy."""
         was_autoplaying = self._pause_autoplay()
         result = self.bridge.replay_trade("sell")
         self._log_signal("DEBUG", price,
@@ -541,6 +588,10 @@ class ReplayEngine:
             self._log_signal("SELL", fill_price,
                              f"Short @ {fill_price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
                              else f"Short @ {fill_price:.2f} | NO ATR — no stop set!")
+
+            # Place SL + TP exit orders in TradingView (like real Floopbot)
+            if atr > 0:
+                self._place_exit_orders(fill_price, atr, "SHORT")
             self._draw_stop_lines()
         else:
             self.errors.append(f"Sell failed: {result.error}")
@@ -572,6 +623,8 @@ class ReplayEngine:
         if result.success:
             self.position_side = "FLAT"
             self.position_entry = 0.0
+            self._tp_price = 0.0
+            self._sl_price = 0.0
             self._log_signal("CLOSE", self.last_price,
                              f"{side} closed @ {self.last_price:.2f}: {reason}")
             self._clear_stop_lines()
@@ -648,6 +701,7 @@ class ReplayEngine:
         stop = self.paper.position.stop_price
         trail = self.paper.position.trail_price
         entry = self.paper.position.entry_price
+        tp = self._tp_price
 
         js = """
         (function() {
@@ -702,10 +756,11 @@ class ReplayEngine:
 
             drawLine(ENTRY_PRICE, '#3b82f6', 'ENTRY');
             drawLine(STOP_PRICE, '#ef4444', 'SL');
+            drawLine(TP_PRICE, '#22c55e', 'TP');
             drawLine(TRAIL_PRICE, '#eab308', 'TRAIL');
             return 'lines_drawn';
         })()
-        """.replace("ENTRY_PRICE", str(entry)).replace("STOP_PRICE", str(stop)).replace("TRAIL_PRICE", str(trail))
+        """.replace("ENTRY_PRICE", str(entry)).replace("STOP_PRICE", str(stop)).replace("TP_PRICE", str(tp)).replace("TRAIL_PRICE", str(trail))
 
         self.bridge._run_cli("ui", "eval", js, timeout=5)
 
@@ -812,7 +867,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         elif path == "/api/config":
             # Update config values
             for key in ["min_signal_strength", "atr_stop_multiplier",
-                        "trail_distance_atr", "max_daily_loss", "max_daily_trades"]:
+                        "trail_distance_atr", "flat_tp_pts", "max_daily_loss", "max_daily_trades"]:
                 if key in data:
                     setattr(self.engine.config, key, data[key])
                     setattr(self.engine.paper.config, key, data[key])

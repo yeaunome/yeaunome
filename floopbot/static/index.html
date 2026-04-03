@@ -206,10 +206,16 @@ body {
   </div>
 </div>
 
-<div class="grid grid-3">
+<div class="grid" style="grid-template-columns: repeat(4, 1fr);">
   <div class="card">
-    <div class="label">ATR Stop Multiplier</div>
+    <div class="label">ATR Stop (SL)</div>
     <div class="value sm" id="atr-mult">1.5x</div>
+    <div class="sub">ATR multiplier</div>
+  </div>
+  <div class="card">
+    <div class="label">Take Profit</div>
+    <div class="value sm green" id="tp-pts">10 pts</div>
+    <div class="sub">flat from entry</div>
   </div>
   <div class="card">
     <div class="label">Trail Distance</div>
@@ -250,6 +256,7 @@ body {
     <label>ATR Stop <input type="number" id="cfg-atr" step="0.1" min="0.5" max="5" value="1.5"></label>
     <label>Trail ATR <input type="number" id="cfg-trail" step="0.1" min="0.5" max="5" value="1.0"></label>
     <label>Max Loss $ <input type="number" id="cfg-maxloss" step="100" min="100" value="1200"></label>
+    <label>TP Points <input type="number" id="cfg-tp" step="1" min="1" max="100" value="10"></label>
     <label>Max Trades/Day <input type="number" id="cfg-maxtrades" min="1" max="50" value="20"></label>
     <button class="btn btn-sm btn-purple" onclick="saveConfig()">Apply</button>
   </div>
@@ -280,6 +287,7 @@ function saveConfig() {
     min_signal_strength: parseInt(document.getElementById('cfg-strength').value),
     atr_stop_multiplier: parseFloat(document.getElementById('cfg-atr').value),
     trail_distance_atr: parseFloat(document.getElementById('cfg-trail').value),
+    flat_tp_pts: parseFloat(document.getElementById('cfg-tp').value),
     max_daily_loss: parseFloat(document.getElementById('cfg-maxloss').value),
     max_daily_trades: parseInt(document.getElementById('cfg-maxtrades').value),
   });
@@ -342,6 +350,7 @@ function updateDashboard(s) {
   document.getElementById('win-loss-sub').textContent = s.wins + 'W / ' + s.losses + 'L';
 
   document.getElementById('atr-mult').textContent = s.atr_stop_multiplier + 'x';
+  document.getElementById('tp-pts').textContent = (s.flat_tp_pts || 10) + ' pts';
   document.getElementById('trail-dist').textContent = s.trail_distance_atr + 'x ATR';
   document.getElementById('trail-mode').textContent = s.trail_mode;
   document.getElementById('min-str').textContent = s.min_signal_strength + '/14';
@@ -354,11 +363,12 @@ function updateDashboard(s) {
   } else {
     const upnl = fmt$(s.unrealized_pnl);
     let stopInfo = '';
-    if (s.stop_price > 0) stopInfo += ' | Stop: ' + s.stop_price.toFixed(2);
-    if (s.trail_price > 0) stopInfo += ' | Trail: ' + s.trail_price.toFixed(2);
+    if (s.stop_price > 0) stopInfo += '<span style="color:#ef4444">SL: ' + s.stop_price.toFixed(2) + '</span>';
+    if (s.tp_price > 0) stopInfo += ' | <span style="color:#22c55e">TP: ' + s.tp_price.toFixed(2) + '</span>';
+    if (s.trail_price > 0) stopInfo += ' | <span style="color:#eab308">Trail: ' + s.trail_price.toFixed(2) + '</span>';
     if (s.atr_at_entry > 0) stopInfo += ' | ATR: ' + s.atr_at_entry.toFixed(2);
     if (s.bars_held > 0) stopInfo += ' | Bars: ' + s.bars_held;
-    pt.innerHTML = s.position + ' @ ' + s.position_entry.toFixed(2) + ' | Unrealized: ' + upnl + '<br><span style="font-size:13px;color:#64748b">' + (stopInfo || ' | No stop set') + '</span>';
+    pt.innerHTML = s.position + ' @ ' + s.position_entry.toFixed(2) + ' | Unrealized: ' + upnl + '<br><span style="font-size:13px">' + (stopInfo || '<span style="color:#ef4444">No stop set</span>') + '</span>';
     pt.className = 'pos-text ' + s.position.toLowerCase();
   }
 
