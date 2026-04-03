@@ -191,8 +191,31 @@ class TVBridge:
         else:
             return MCPResult(success=False, data={}, error=f"Unknown action: {action}")
 
+    def _ensure_trade_panel_open(self):
+        """Click the 'Trade' tab at the bottom to open the order panel."""
+        js_open_trade = (
+            '(function() {'
+            '  var tabs = document.querySelectorAll("button, [class*=tab], [class*=buttonTab]");'
+            '  for (var i = 0; i < tabs.length; i++) {'
+            '    var text = (tabs[i].textContent || "").trim();'
+            '    if (/^Trade$/i.test(text) && tabs[i].offsetParent !== null) {'
+            '      tabs[i].click();'
+            '      return "trade_panel_opened";'
+            '    }'
+            '  }'
+            '  return "trade_tab_not_found";'
+            '})()'
+        )
+        result = self._run_cli("ui", "eval", js_open_trade, timeout=10)
+        if result.success:
+            time.sleep(0.5)
+        return result
+
     def _place_order_via_ui(self, side: str) -> MCPResult:
         """Select side, switch to Market, click Place Order."""
+        # Step 0: Ensure the Trade panel is open
+        self._ensure_trade_panel_open()
+
         # Step 1: Click the Buy or Sell side selector
         js_select_side = (
             '(function() {'
@@ -253,6 +276,7 @@ class TVBridge:
 
     def _close_position_via_ui(self) -> MCPResult:
         """Close position by clicking the close/flatten button, or reversing."""
+        self._ensure_trade_panel_open()
         # Try to find a close/flatten button
         js_close = (
             '(function() {'
