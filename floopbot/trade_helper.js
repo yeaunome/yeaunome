@@ -316,55 +316,92 @@
       return JSON.stringify(results);
     },
 
-    // Click the TP button on the position bar (appears after entering a trade)
-    clickPositionTP: function() {
-      return this._clickPositionButton('TP');
+    // Find the chart canvas and the Y coordinate for a given price
+    _getChartCanvas: function() {
+      // TradingView renders the chart on a canvas element
+      var canvases = document.querySelectorAll('canvas');
+      var best = null;
+      var bestArea = 0;
+      for (var i = 0; i < canvases.length; i++) {
+        var c = canvases[i];
+        if (!c.offsetParent) continue;
+        var rect = c.getBoundingClientRect();
+        var area = rect.width * rect.height;
+        // The main chart canvas is the largest canvas
+        if (area > bestArea && rect.width > 200 && rect.height > 200) {
+          bestArea = area;
+          best = {canvas: c, rect: rect};
+        }
+      }
+      return best;
     },
 
-    // Click the SL button on the position bar
-    clickPositionSL: function() {
-      return this._clickPositionButton('SL');
-    },
-
-    // Generic: find and click a button on the chart position bar
-    _clickPositionButton: function(label) {
-      var all = document.querySelectorAll('*');
-      var candidates = [];
+    _priceToY: function(price) {
+      // Use the price scale labels on the right to calculate Y for a price
+      var scale = document.querySelector('[class*=price-axis]') ||
+                  document.querySelector('[class*=priceAxis]');
+      if (!scale) return -1;
+      var labels = scale.querySelectorAll('[class*=label], [class*=priceLine]');
+      var points = [];
+      var all = scale.querySelectorAll('*');
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
-        if (!el.offsetParent) continue;
-        var text = (el.textContent || '').trim();
-        if (text !== label) continue;
-        var rect = el.getBoundingClientRect();
-        if (rect.width < 5 || rect.height < 5) continue;
-        if (rect.left > window.innerWidth * 0.8) continue;
-        candidates.push({
-          el: el, rect: rect, tag: el.tagName,
-          cls: typeof el.className === 'string' ? el.className : '',
-          kids: el.children.length,
-          area: rect.width * rect.height
-        });
+        if (el.children.length > 0) continue;
+        var val = parseFloat((el.textContent || '').replace(/[,\s]/g, ''));
+        if (isNaN(val) || val < 100) continue;
+        var r = el.getBoundingClientRect();
+        if (r.height < 5 || r.height > 30) continue;
+        points.push({price: val, y: r.top + r.height / 2});
       }
-      if (candidates.length === 0) return label.toLowerCase() + '_not_found';
+      if (points.length < 2) return -1;
+      points.sort(function(a, b) { return a.price - b.price; });
+      var lo = points[0], hi = points[points.length - 1];
+      if (hi.price === lo.price) return -1;
+      var pxPerPt = (lo.y - hi.y) / (hi.price - lo.price);
+      return hi.y + (hi.price - price) * pxPerPt;
+    },
 
-      // Sort: prefer smallest (most specific leaf) element
-      candidates.sort(function(a, b) { return a.area - b.area; });
+    // Click on the canvas at specific coordinates (simulates real mouse click)
+    _clickCanvas: function(x, y) {
+      var chart = this._getChartCanvas();
+      if (!chart) return 'no_canvas';
+      var el = chart.canvas;
+      var opts = {
+        clientX: x, clientY: y,
+        screenX: x, screenY: y,
+        bubbles: true, cancelable: true,
+        view: window, detail: 1,
+        button: 0, buttons: 1
+      };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new MouseEvent('mousedown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+      el.dispatchEvent(new MouseEvent('mouseup', opts));
+      el.dispatchEvent(new MouseEvent('click', opts));
+      return 'canvas_click:' + Math.round(x) + ',' + Math.round(y);
+    },
 
-      // Try clicking each candidate until one works
-      for (var c = 0; c < candidates.length; c++) {
-        var cand = candidates[c];
-        // Try click
-        cand.el.click();
-        // Also try mousedown+mouseup for elements that use those
-        cand.el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
-        cand.el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true}));
-        cand.el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true}));
-        cand.el.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, cancelable: true}));
+    // Click the TP button on the position bar (canvas-rendered)
+    // Position bar layout: [qty ~30px] [TP ~25px] [SL ~25px] [P&L...]
+    clickPositionTP: function(entryPrice) {
+      var y = this._priceToY(entryPrice);
+      if (y < 0) return 'tp_no_y_for_price';
+      var chart = this._getChartCanvas();
+      if (!chart) return 'tp_no_canvas';
+      // TP button is approximately 55-70px from the left edge of the chart
+      var x = chart.rect.left + 58;
+      return 'tp_' + this._clickCanvas(x, y);
+    },
 
-        return label.toLowerCase() + '_clicked:' + cand.tag + ':kids=' + cand.kids +
-          ':' + cand.cls.substring(0, 40) + ':' + Math.round(cand.rect.left) + ',' + Math.round(cand.rect.top);
-      }
-      return label.toLowerCase() + '_not_found';
+    // Click the SL button on the position bar (canvas-rendered)
+    clickPositionSL: function(entryPrice) {
+      var y = this._priceToY(entryPrice);
+      if (y < 0) return 'sl_no_y_for_price';
+      var chart = this._getChartCanvas();
+      if (!chart) return 'sl_no_canvas';
+      // SL button is approximately 85-100px from the left edge
+      var x = chart.rect.left + 92;
+      return 'sl_' + this._clickCanvas(x, y);
     },
 
     // Set the price on a TP/SL input that appears after clicking TP or SL

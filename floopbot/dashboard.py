@@ -662,19 +662,15 @@ class ReplayEngine:
         self._tp_price = tp_price
         self._sl_price = stop_price
 
-        # Probe the position bar to see what TP/SL elements look like
-        time.sleep(1.0)  # wait for position bar to render
-        probe = self.bridge._run_cli("ui", "eval", "window._floop.probePositionBar()", timeout=8)
-        probe_data = probe.data.get("result", "?") if probe.success else probe.error
-        self._log_signal("DEBUG", 0, f"Position bar probe: {str(probe_data)[:200]}")
-
-        # Click TP button on the position bar, then set price
-        tp_click = self.bridge._run_cli("ui", "eval", "window._floop.clickPositionTP()", timeout=8)
+        # Click TP button on the position bar (canvas-rendered), then set price
+        time.sleep(1.0)  # wait for position bar to render on chart
+        tp_click = self.bridge._run_cli("ui", "eval",
+            f"window._floop.clickPositionTP({fill_price})", timeout=8)
         tp_click_status = tp_click.data.get("result", "") if tp_click.success else tp_click.error
-        self._log_signal("TP", tp_price, f"TP button: {tp_click_status}")
+        self._log_signal("TP", tp_price, f"TP click: {tp_click_status}")
 
-        if "clicked" in str(tp_click_status):
-            time.sleep(0.5)
+        if "canvas_click" in str(tp_click_status):
+            time.sleep(0.8)
             tp_set = self.bridge._run_cli("ui", "eval",
                 f"window._floop.setTPSLPrice({tp_price})", timeout=8)
             tp_set_status = tp_set.data.get("result", "") if tp_set.success else tp_set.error
@@ -683,12 +679,13 @@ class ReplayEngine:
 
         # Click SL button on the position bar, then set price
         time.sleep(0.5)
-        sl_click = self.bridge._run_cli("ui", "eval", "window._floop.clickPositionSL()", timeout=8)
+        sl_click = self.bridge._run_cli("ui", "eval",
+            f"window._floop.clickPositionSL({fill_price})", timeout=8)
         sl_click_status = sl_click.data.get("result", "") if sl_click.success else sl_click.error
-        self._log_signal("SL", stop_price, f"SL button: {sl_click_status}")
+        self._log_signal("SL", stop_price, f"SL click: {sl_click_status}")
 
-        if "clicked" in str(sl_click_status):
-            time.sleep(0.5)
+        if "canvas_click" in str(sl_click_status):
+            time.sleep(0.8)
             sl_set = self.bridge._run_cli("ui", "eval",
                 f"window._floop.setTPSLPrice({stop_price})", timeout=8)
             sl_set_status = sl_set.data.get("result", "") if sl_set.success else sl_set.error
