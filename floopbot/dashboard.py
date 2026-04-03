@@ -227,13 +227,28 @@ class ReplayEngine:
             self.bridge.set_timeframe("1")
             time.sleep(1)
 
-            # ── Step 3: Select first available date ──
-            self._log_signal("SYSTEM", 0, "3/6 Selecting first available date...")
-            if not self.start_replay():
-                self.bridge.dismiss_dialogs()
-                time.sleep(1)
+            # ── Step 3: Click "Random Bar" to start at random position ──
+            self._log_signal("SYSTEM", 0, "3/6 Clicking Random Bar...")
+            # Probe the replay picker to see what buttons are available
+            probe = self.bridge._run_cli("ui", "eval",
+                "window._floop.probeReplayPicker()", timeout=8)
+            probe_data = probe.data.get("result", "?") if probe.success else probe.error
+            self._log_signal("DEBUG", 0, f"Replay picker: {str(probe_data)[:300]}")
+
+            random_result = self.bridge._run_cli("ui", "eval",
+                "window._floop.clickRandomBar()", timeout=8)
+            random_status = random_result.data.get("result", "?") if random_result.success else "failed"
+            self._log_signal("SYSTEM", 0, f"  Random bar: {random_status}")
+
+            if "not_found" in str(random_status):
+                # Fallback: use replay start (select first available date)
+                self._log_signal("SYSTEM", 0, "  Fallback: selecting first available date...")
                 if not self.start_replay():
-                    return False
+                    self.bridge.dismiss_dialogs()
+                    time.sleep(1)
+                    if not self.start_replay():
+                        return False
+            self.replay_active = True
             time.sleep(1.5)
 
             # ── Step 4: Switch to 5m timeframe (for FLOOP Pro signals) ──

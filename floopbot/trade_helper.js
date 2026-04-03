@@ -587,6 +587,84 @@
       return 'interval_not_found:' + interval;
     },
 
+    // Click "Random Bar" button in the replay date selector
+    clickRandomBar: function() {
+      // After entering replay mode, TradingView shows date selection with options
+      // including "Select first available date" and a shuffle/random icon
+      var all = document.querySelectorAll('button, div, span, [class*=button]');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var text = (el.textContent || '').trim();
+        // Look for "Random" text or shuffle-like button
+        if (/random|shuffle/i.test(text)) {
+          el.click();
+          return 'random_bar_clicked:text';
+        }
+        // Check aria-label and title attributes
+        var label = el.getAttribute('aria-label') || el.getAttribute('title') || '';
+        if (/random|shuffle/i.test(label)) {
+          el.click();
+          return 'random_bar_clicked:aria';
+        }
+      }
+      // Look for the shuffle/dice icon button — it's often an SVG icon button
+      // near the replay controls in the middle of the screen
+      var buttons = document.querySelectorAll('button');
+      for (var i = 0; i < buttons.length; i++) {
+        var btn = buttons[i];
+        if (!btn.offsetParent) continue;
+        var rect = btn.getBoundingClientRect();
+        // Should be in the middle area of the screen (replay date picker)
+        if (rect.top < window.innerHeight * 0.3 || rect.top > window.innerHeight * 0.7) continue;
+        if (rect.left < window.innerWidth * 0.2 || rect.left > window.innerWidth * 0.8) continue;
+        // Check for SVG inside (icon button)
+        var svg = btn.querySelector('svg');
+        var dataName = btn.getAttribute('data-name') || '';
+        if (svg && /random|shuffle|dice/i.test(dataName)) {
+          btn.click();
+          return 'random_bar_clicked:data-name:' + dataName;
+        }
+      }
+      // Fallback: look for any button with a data-name containing 'random' or 'jump'
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var dn = el.getAttribute('data-name') || '';
+        if (/random|jump.*random|shuffle/i.test(dn)) {
+          el.click();
+          return 'random_bar_clicked:dn:' + dn;
+        }
+      }
+      return 'random_bar_not_found';
+    },
+
+    // Probe: find all clickable elements in the replay date picker area
+    probeReplayPicker: function() {
+      var results = [];
+      var all = document.querySelectorAll('button, [role=button], [class*=button]');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var rect = el.getBoundingClientRect();
+        // Only elements in the middle of the screen (replay picker area)
+        if (rect.top < window.innerHeight * 0.25 || rect.top > window.innerHeight * 0.75) continue;
+        if (rect.left < window.innerWidth * 0.1 || rect.left > window.innerWidth * 0.9) continue;
+        results.push({
+          text: (el.textContent || '').trim().substring(0, 30),
+          tag: el.tagName,
+          dataName: el.getAttribute('data-name') || '',
+          ariaLabel: el.getAttribute('aria-label') || '',
+          title: el.getAttribute('title') || '',
+          hasSvg: !!el.querySelector('svg'),
+          x: Math.round(rect.left),
+          y: Math.round(rect.top),
+          w: Math.round(rect.width)
+        });
+      }
+      return JSON.stringify(results.slice(0, 15));
+    },
+
     // Dismiss dialogs (Stay on "Leave current replay?")
     dismissDialog: function() {
       var btns = document.querySelectorAll('button');
