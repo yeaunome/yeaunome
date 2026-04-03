@@ -612,5 +612,9 @@ def run_dashboard(config: TradingConfig = None, port: int = 8082):
     except KeyboardInterrupt:
         print("\nShutting down...")
         engine.stop_loop()
-        engine.stop_replay()
+        try:
+            engine.bridge.replay_stop()
+        except Exception:
+            pass
+        engine.replay_active = False
         server.shutdown()
