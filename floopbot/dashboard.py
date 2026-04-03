@@ -350,23 +350,48 @@ class ReplayEngine:
                     if signal.signal_strength == 0 and "signal_strength_value" in self.table_data:
                         signal.signal_strength = self.table_data["signal_strength_value"]
 
-                # Get ATR from study values if not in signal text
+                # Get ATR from multiple sources, validate each
+                atr_source = "none"
                 if signal.atr <= 0:
+                    # Source 1: Study values from indicator
                     values = self.bridge.get_study_values()
                     if values.success:
                         study_vals = parse_study_values(values.data, self.config.floop_indicator_name)
-                        # Look for ATR plot value
                         for key in ("ATR", "atr", "ATR Value", "atr_value"):
                             if key in study_vals and study_vals[key] > 0:
                                 signal.atr = float(study_vals[key])
+                                atr_source = f"study:{key}={signal.atr:.2f}"
                                 break
-                    # Fallback: derive ATR from table "ATR 0.04%" and current price
-                    if signal.atr <= 0 and "atr_pct" in self.table_data and self.last_price > 0:
-                        signal.atr = self.last_price * (self.table_data["atr_pct"] / 100.0)
+                        # Log all study values for debugging
+                        if not study_vals:
+                            # Try without filter to see what's available
+                            all_vals = parse_study_values(values.data, "")
+                            if all_vals:
+                                self._log_signal("DEBUG", 0,
+                                    f"Study values (all): {list(all_vals.keys())[:10]}")
 
-                # Last resort: calculate ATR from OHLCV bars
+                # Source 2: Calculate from OHLCV bars (most reliable)
                 if signal.atr <= 0:
                     signal.atr = self._calc_atr_from_ohlcv()
+                    if signal.atr > 0:
+                        atr_source = f"ohlcv={signal.atr:.2f}"
+
+                # Source 3: Table percentage as last resort
+                if signal.atr <= 0 and "atr_pct" in self.table_data and self.last_price > 0:
+                    signal.atr = self.last_price * (self.table_data["atr_pct"] / 100.0)
+                    atr_source = f"table_pct={self.table_data['atr_pct']}%={signal.atr:.2f}"
+
+                # Validate ATR: for MNQ 5min, ATR should be ~20-100+ points
+                # If ATR < 0.1% of price, it's likely wrong — use a safe minimum
+                min_atr = self.last_price * 0.002  # 0.2% of price as floor (~30pts for MNQ)
+                if signal.atr > 0 and signal.atr < min_atr:
+                    self._log_signal("WARN", 0,
+                        f"ATR {signal.atr:.2f} too small (min {min_atr:.2f}), "
+                        f"source: {atr_source} — using minimum")
+                    signal.atr = min_atr
+                    atr_source += f"→clamped:{min_atr:.2f}"
+
+                self._log_signal("DEBUG", 0, f"ATR source: {atr_source}")
 
                 self._log_signal(signal.side.value, signal.price,
                                  f"Str: {signal.signal_strength} ATR: {signal.atr:.2f}" if signal.atr > 0
@@ -461,6 +486,15 @@ class ReplayEngine:
         if status.success and not status.data.get("is_autoplay_started"):
             self.bridge.replay_autoplay()  # toggle on
 
+    def _get_tv_fill_price(self) -> float:
+        """Try to get the actual fill price from TradingView after order execution."""
+        time.sleep(0.3)  # wait for fill
+        quote = self.bridge.get_quote()
+        if quote.success:
+            # Use the bid/ask midpoint or last price as best estimate of fill
+            return quote.data.get("close", 0) or quote.data.get("last", 0)
+        return 0.0
+
     def _execute_buy(self, signal: FloopSignal, price: float, bar_time: str):
         """Execute a buy in TradingView replay and track internally."""
         was_autoplaying = self._pause_autoplay()
@@ -468,14 +502,19 @@ class ReplayEngine:
         self._log_signal("DEBUG", price,
                          f"replay_trade(buy) → success={result.success} data={result.data} err={result.error}")
         if result.success:
-            self.paper.on_signal(signal, current_price=price, bar_time=bar_time)
+            # Get a more accurate fill price after execution
+            fill_price = self._get_tv_fill_price() or price
+            if abs(fill_price - price) > 0.5:
+                self._log_signal("DEBUG", fill_price,
+                                 f"Fill price adjusted: {price:.2f} → {fill_price:.2f}")
+            self.paper.on_signal(signal, current_price=fill_price, bar_time=bar_time)
             self.position_side = "LONG"
-            self.position_entry = price
+            self.position_entry = fill_price
             stop = self.paper.position.stop_price
             atr = self.paper.position.atr_at_entry
-            self._log_signal("BUY", price,
-                             f"Long @ {price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
-                             else f"Long @ {price:.2f} | NO ATR — no stop set!")
+            self._log_signal("BUY", fill_price,
+                             f"Long @ {fill_price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
+                             else f"Long @ {fill_price:.2f} | NO ATR — no stop set!")
             self._draw_stop_lines()
         else:
             self.errors.append(f"Buy failed: {result.error}")
@@ -490,14 +529,18 @@ class ReplayEngine:
         self._log_signal("DEBUG", price,
                          f"replay_trade(sell) → success={result.success} data={result.data} err={result.error}")
         if result.success:
-            self.paper.on_signal(signal, current_price=price, bar_time=bar_time)
+            fill_price = self._get_tv_fill_price() or price
+            if abs(fill_price - price) > 0.5:
+                self._log_signal("DEBUG", fill_price,
+                                 f"Fill price adjusted: {price:.2f} → {fill_price:.2f}")
+            self.paper.on_signal(signal, current_price=fill_price, bar_time=bar_time)
             self.position_side = "SHORT"
-            self.position_entry = price
+            self.position_entry = fill_price
             stop = self.paper.position.stop_price
             atr = self.paper.position.atr_at_entry
-            self._log_signal("SELL", price,
-                             f"Short @ {price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
-                             else f"Short @ {price:.2f} | NO ATR — no stop set!")
+            self._log_signal("SELL", fill_price,
+                             f"Short @ {fill_price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
+                             else f"Short @ {fill_price:.2f} | NO ATR — no stop set!")
             self._draw_stop_lines()
         else:
             self.errors.append(f"Sell failed: {result.error}")
@@ -544,15 +587,45 @@ class ReplayEngine:
             ohlcv = self.bridge.get_ohlcv(count=period + 5)
             if not ohlcv.success:
                 return 0.0
-            bars = ohlcv.data.get("bars", ohlcv.data.get("data", []))
+
+            # Handle various OHLCV response formats
+            data = ohlcv.data
+            bars = data.get("bars") or data.get("data") or data.get("candles") or []
+
+            # If data is a dict with OHLCV arrays instead of bar objects
+            if not bars and "close" in data:
+                closes = data.get("close", [])
+                highs = data.get("high", [])
+                lows = data.get("low", [])
+                bars = [{"high": h, "low": l, "close": c}
+                        for h, l, c in zip(highs, lows, closes)]
+
             if not bars or len(bars) < 2:
+                self._log_signal("DEBUG", 0,
+                    f"OHLCV no bars, keys: {list(data.keys())[:8]}")
                 return 0.0
+
+            # Log first bar structure for debugging
+            if self.bar_count <= 2:
+                self._log_signal("DEBUG", 0,
+                    f"OHLCV bar[0]: {bars[0] if bars else 'empty'}")
 
             true_ranges = []
             for i in range(1, len(bars)):
-                h = bars[i].get("high", 0)
-                l = bars[i].get("low", 0)
-                prev_c = bars[i - 1].get("close", 0)
+                bar = bars[i]
+                prev = bars[i - 1]
+                # Handle both dict and list formats
+                if isinstance(bar, dict):
+                    h = float(bar.get("high", 0) or 0)
+                    l = float(bar.get("low", 0) or 0)
+                    prev_c = float(prev.get("close", 0) or 0)
+                elif isinstance(bar, (list, tuple)) and len(bar) >= 4:
+                    # [time, open, high, low, close, volume]
+                    h = float(bar[2])
+                    l = float(bar[3])
+                    prev_c = float(bars[i - 1][4])
+                else:
+                    continue
                 if h == 0 or l == 0 or prev_c == 0:
                     continue
                 tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
@@ -560,8 +633,10 @@ class ReplayEngine:
 
             if not true_ranges:
                 return 0.0
-            return sum(true_ranges[-period:]) / min(len(true_ranges), period)
-        except Exception:
+            atr = sum(true_ranges[-period:]) / min(len(true_ranges), period)
+            return atr
+        except Exception as e:
+            self.errors.append(f"ATR calc error: {e}")
             return 0.0
 
     def _draw_stop_lines(self):
