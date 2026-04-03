@@ -103,6 +103,7 @@ class ReplayEngine:
             "trail_mode": self.config.trail_mode,
             "min_signal_strength": self.config.min_signal_strength,
             "max_daily_loss": self.config.max_daily_loss,
+            "max_daily_trades": self.config.max_daily_trades,
             "signal_strength": self.table_data.get("signal_strength_value", "—"),
             "quality": self.table_data.get("quality", ""),
             "bias": self.table_data.get("bias", "—"),
@@ -264,16 +265,20 @@ class ReplayEngine:
                     self._process_signal(signal, bar_time)
 
     def _process_signal(self, signal: FloopSignal, bar_time: str):
-        """Process signal and execute trades in TradingView replay."""
+        """
+        Process signal and execute trades in TradingView replay.
+
+        Replicates the actual Floopbot entry gates from main.py:
+        1. Armed check (handled by caller)
+        2. Daily loss limit check
+        3. Signal strength >= min_signal_strength
+        4. Max trades per day
+        5. Same-direction skip (already in position same side)
+        6. Opposite direction → reverse (close + open)
+        """
         price = self.last_price
 
-        # Filter by strength
-        if signal.is_entry and signal.signal_strength > 0:
-            if signal.signal_strength < self.config.min_signal_strength:
-                self._log_signal("SKIP", price,
-                                 f"Strength {signal.signal_strength} < {self.config.min_signal_strength}")
-                return
-
+        # ── EXIT signals bypass all entry gates ──
         if signal.is_exit:
             if not self.paper.is_flat:
                 self._execute_close("signal_exit")
@@ -282,6 +287,33 @@ class ReplayEngine:
                     self._log_trade(trade)
             return
 
+        # ── Entry gate 1: Daily loss limit ──
+        if abs(self.paper.daily_pnl) >= self.config.max_daily_loss:
+            self._log_signal("SKIP", price,
+                             f"Daily loss limit hit (${self.paper.daily_pnl:.0f} / -${self.config.max_daily_loss:.0f})")
+            return
+
+        # ── Entry gate 2: Signal strength filter ──
+        if signal.signal_strength > 0 and signal.signal_strength < self.config.min_signal_strength:
+            self._log_signal("SKIP", price,
+                             f"Strength {signal.signal_strength} < {self.config.min_signal_strength}")
+            return
+
+        # ── Entry gate 3: Max trades per day ──
+        if self.paper.daily_trades >= self.config.max_daily_trades:
+            self._log_signal("SKIP", price,
+                             f"Max daily trades reached ({self.paper.daily_trades}/{self.config.max_daily_trades})")
+            return
+
+        # ── Entry gate 4: Same-direction skip ──
+        if signal.side == SignalSide.LONG and self.paper.is_long:
+            self._log_signal("SKIP", price, "Already LONG — duplicate direction")
+            return
+        if signal.side == SignalSide.SHORT and self.paper.is_short:
+            self._log_signal("SKIP", price, "Already SHORT — duplicate direction")
+            return
+
+        # ── Reversal: close opposite, then open new ──
         if signal.side == SignalSide.LONG:
             if self.paper.is_short:
                 self._execute_close("signal_reverse")
@@ -422,7 +454,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         elif path == "/api/config":
             # Update config values
             for key in ["min_signal_strength", "atr_stop_multiplier",
-                        "trail_distance_atr", "max_daily_loss"]:
+                        "trail_distance_atr", "max_daily_loss", "max_daily_trades"]:
                 if key in data:
                     setattr(self.engine.config, key, data[key])
                     setattr(self.engine.paper.config, key, data[key])

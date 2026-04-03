@@ -3,6 +3,7 @@ Floopbot replay tester - CLI entry point.
 
 Usage:
     python -m floopbot                          # Run with defaults
+    python -m floopbot --dashboard              # Launch web dashboard
     python -m floopbot --symbol MNQ1! --tf 5    # Override symbol/timeframe
     python -m floopbot --config path/to/config  # Use custom config
     python -m floopbot --bars 500 --step        # Step mode, 500 bars
@@ -39,6 +40,8 @@ Examples:
     parser.add_argument("--config", "-c", help="Path to config JSON file")
     parser.add_argument("--save-config", action="store_true", help="Save default config and exit")
     parser.add_argument("--check", action="store_true", help="Check connection and exit")
+    parser.add_argument("--dashboard", action="store_true", help="Launch web dashboard UI")
+    parser.add_argument("--port", type=int, default=8082, help="Dashboard port (default: 8082)")
 
     # Trading params
     parser.add_argument("--symbol", "-s", help="Symbol (e.g., MNQ1!, ES1!, NQ1!)")
@@ -130,6 +133,12 @@ Examples:
                 print(json.dumps(health.data, indent=2))
             else:
                 print(f"MCP health: FAILED - {health.error}")
+        return
+
+    # Dashboard mode
+    if args.dashboard:
+        from .dashboard import run_dashboard
+        run_dashboard(config, port=args.port)
         return
 
     # Print config summary

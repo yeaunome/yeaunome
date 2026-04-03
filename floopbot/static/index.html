@@ -253,6 +253,7 @@ body {
     <label>ATR Stop <input type="number" id="cfg-atr" step="0.1" min="0.5" max="5" value="1.5"></label>
     <label>Trail ATR <input type="number" id="cfg-trail" step="0.1" min="0.5" max="5" value="1.0"></label>
     <label>Max Loss $ <input type="number" id="cfg-maxloss" step="100" min="100" value="1200"></label>
+    <label>Max Trades/Day <input type="number" id="cfg-maxtrades" min="1" max="50" value="20"></label>
     <button class="btn btn-sm btn-purple" onclick="saveConfig()">Apply</button>
   </div>
 </div>
@@ -277,6 +278,7 @@ function saveConfig() {
     atr_stop_multiplier: parseFloat(document.getElementById('cfg-atr').value),
     trail_distance_atr: parseFloat(document.getElementById('cfg-trail').value),
     max_daily_loss: parseFloat(document.getElementById('cfg-maxloss').value),
+    max_daily_trades: parseInt(document.getElementById('cfg-maxtrades').value),
   });
 }
 
@@ -318,7 +320,7 @@ function updateDashboard(s) {
   dpnl.textContent = fmt$(s.daily_pnl);
   dpnl.className = 'value ' + (s.daily_pnl > 0 ? 'green' : s.daily_pnl < 0 ? 'red' : '');
 
-  document.getElementById('daily-trades').textContent = s.daily_trades + ' trades today';
+  document.getElementById('daily-trades').textContent = s.daily_trades + ' / ' + (s.max_daily_trades || 20) + ' trades today';
 
   const pct = s.max_daily_loss > 0 ? Math.round(Math.abs(s.daily_pnl) / s.max_daily_loss * 100) : 0;
   document.getElementById('daily-loss-pct').textContent = pct + '%';
