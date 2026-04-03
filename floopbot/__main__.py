@@ -65,8 +65,8 @@ Examples:
 
     args = parser.parse_args()
 
-    # Load or create config
-    config = TradingConfig.load(args.config) if args.config else TradingConfig()
+    # Load config (from file if it exists, or create fresh)
+    config = TradingConfig.load(args.config)
 
     # Apply overrides
     if args.symbol:
