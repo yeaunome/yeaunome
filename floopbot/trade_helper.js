@@ -244,6 +244,48 @@
       return this.selectOrderType('Market');
     },
 
+    // Set the replay step interval (e.g., "1m", "5m", "1s")
+    setReplayStep: function(interval) {
+      // Find the step size button in the replay controls bar (bottom)
+      var btns = document.querySelectorAll('button, [class*=button], span');
+      for (var i = 0; i < btns.length; i++) {
+        var el = btns[i];
+        if (!el.offsetParent) continue;
+        var text = el.textContent.trim();
+        // Match current step size like "5m", "1m", "1s" in the replay bar
+        if (/^[0-9]+[sm]$/.test(text)) {
+          var rect = el.getBoundingClientRect();
+          // Must be in the bottom area (replay controls)
+          if (rect.top > window.innerHeight * 0.7) {
+            el.click();
+            // Wait for dropdown, then find the target interval
+            setTimeout(function() {
+              var items = document.querySelectorAll('[class*=menu] [class*=item], [class*=dropdown] span, [class*=popup] span');
+              for (var j = 0; j < items.length; j++) {
+                if (items[j].textContent.trim() === interval && items[j].offsetParent) {
+                  items[j].click();
+                  return;
+                }
+              }
+              // Fallback: search all visible elements
+              var all = document.querySelectorAll('span, div');
+              for (var j = 0; j < all.length; j++) {
+                if (all[j].textContent.trim() === interval && all[j].offsetParent && all[j].children.length === 0) {
+                  var r = all[j].getBoundingClientRect();
+                  if (r.top > window.innerHeight * 0.4) {
+                    all[j].click();
+                    return;
+                  }
+                }
+              }
+            }, 300);
+            return 'step_menu_clicked_' + text;
+          }
+        }
+      }
+      return 'step_button_not_found';
+    },
+
     // Dismiss dialogs (Stay on "Leave current replay?")
     dismissDialog: function() {
       var btns = document.querySelectorAll('button');

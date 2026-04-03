@@ -41,6 +41,7 @@ class TradingConfig:
     # Replay settings
     replay_start_date: str = ""  # YYYY-MM-DD, empty = first available
     replay_speed_ms: int = 0  # autoplay delay, 0 = fastest
+    replay_step_interval: str = "1m"  # Replay bar step: "1m" for precise stops
     step_mode: bool = False  # True = step one bar at a time, False = autoplay
     bars_to_run: int = 0  # 0 = unlimited
 

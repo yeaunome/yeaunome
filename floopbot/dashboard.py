@@ -223,6 +223,15 @@ class ReplayEngine:
         if "clicked" in str(trade_status):
             time.sleep(1)  # Wait for order panel to render
 
+        # Set replay step to 1m for precise stop/TP management
+        # (strategy signals from 5m FLOOP Pro, but we step on 1m bars)
+        step_iv = self.config.replay_step_interval
+        step_result = self.bridge._run_cli(
+            "ui", "eval", f"window._floop.setReplayStep('{step_iv}')", timeout=8)
+        step_status = step_result.data.get("result", "?") if step_result.success else "failed"
+        self._log_signal("SYSTEM", 0, f"Replay step → {step_iv}: {step_status}")
+        time.sleep(0.5)
+
         # Start TradingView autoplay (fast-forward)
         result = self.bridge.replay_autoplay(speed=speed)
         if result.success:
@@ -291,6 +300,87 @@ class ReplayEngine:
 
         self.running = False
 
+    def _check_tv_position(self) -> str:
+        """
+        Check TradingView's actual position state via the trade list.
+        Returns 'LONG', 'SHORT', or 'FLAT'.
+        """
+        js = """
+        (function() {
+            var rows = document.querySelectorAll('tr');
+            var lastTrade = null;
+            for (var i = 0; i < rows.length; i++) {
+                var cells = rows[i].querySelectorAll('td');
+                if (cells.length < 3) continue;
+                var typeText = (cells[1] && cells[1].textContent || '').trim();
+                var exitType = (cells[0] && cells[0].textContent || '').trim();
+                // Look for entry/exit rows
+                if (/Entry/i.test(exitType)) {
+                    if (/Long/i.test(typeText)) lastTrade = {side: 'LONG', closed: false};
+                    else if (/Short/i.test(typeText)) lastTrade = {side: 'SHORT', closed: false};
+                }
+                if (/Exit/i.test(exitType) && lastTrade && !lastTrade.closed) {
+                    lastTrade.closed = true;
+                }
+            }
+            if (!lastTrade) return 'FLAT';
+            if (lastTrade.closed) return 'FLAT';
+            return lastTrade.side;
+        })()
+        """
+        result = self.bridge._run_cli("ui", "eval", js, timeout=5)
+        if result.success:
+            tv_pos = result.data.get("result", "FLAT")
+            if tv_pos in ("LONG", "SHORT", "FLAT"):
+                return tv_pos
+        return "UNKNOWN"
+
+    def _sync_tv_position(self):
+        """
+        Detect when TradingView closes a position (TP/SL hit) that we didn't initiate.
+        Syncs internal state with TradingView's actual state.
+        """
+        if self.position_side == "FLAT":
+            return  # nothing to sync
+
+        tv_pos = self._check_tv_position()
+        if tv_pos == "UNKNOWN":
+            return  # couldn't read TV state
+
+        # Detect TP/SL hit: we think we're in a position but TV shows flat
+        if tv_pos == "FLAT" and self.position_side != "FLAT":
+            exit_reason = "tv_exit"
+            # Determine if it was TP or SL based on price
+            if self._tp_price > 0 and self.position_side == "LONG" and self.last_price >= self._tp_price - 1:
+                exit_reason = "take_profit"
+            elif self._tp_price > 0 and self.position_side == "SHORT" and self.last_price <= self._tp_price + 1:
+                exit_reason = "take_profit"
+            elif self._sl_price > 0 and self.position_side == "LONG" and self.last_price <= self._sl_price + 1:
+                exit_reason = "stop_loss"
+            elif self._sl_price > 0 and self.position_side == "SHORT" and self.last_price >= self._sl_price - 1:
+                exit_reason = "stop_loss"
+
+            self._log_signal("SYNC", self.last_price,
+                             f"TV position went FLAT — {exit_reason} (was {self.position_side})")
+
+            # Close internal position to match TV
+            if not self.paper.is_flat:
+                trade = self.paper.flatten(self.last_price, self.last_bar_time)
+                if trade:
+                    trade.exit_reason = exit_reason
+                    self._log_trade(trade)
+
+            self.position_side = "FLAT"
+            self.position_entry = 0.0
+            self._tp_price = 0.0
+            self._sl_price = 0.0
+            self._clear_stop_lines()
+
+        # Detect desync: TV shows opposite position
+        elif tv_pos != "FLAT" and tv_pos != self.position_side:
+            self._log_signal("WARN", self.last_price,
+                             f"Position desync! Dashboard={self.position_side} TV={tv_pos}")
+
     def _poll_and_process(self):
         """Read current state, detect signals, manage trades."""
         # Get quote
@@ -306,16 +396,27 @@ class ReplayEngine:
         if self.last_price <= 0:
             return
 
-        # Process bar through paper trader (check stops)
-        # Save position side BEFORE on_bar() closes it internally
-        pre_bar_side = self.position_side
-        stopped = self.paper.on_bar(high, low, self.last_price, bar_time)
-        if stopped:
-            self._execute_close(stopped.exit_reason, closing_side=pre_bar_side)
-            self._log_trade(stopped)
-        elif not self.paper.is_flat and self.bar_count % 5 == 0:
-            # Redraw stop lines periodically to track trailing stop movement
-            self._draw_stop_lines()
+        # ── Step 1: Sync with TradingView's actual position ──
+        # Detect when TV's SL/TP orders execute (position closed without our knowledge)
+        self._sync_tv_position()
+
+        # ── Step 2: Internal trailing stop management ──
+        # Only manage trailing stop internally (SL and TP are TV orders)
+        if not self.paper.is_flat:
+            pre_bar_side = self.position_side
+            # Update trail and excursions, but skip TP/SL check (TV handles those)
+            self.paper.on_bar(high, low, self.last_price, bar_time)
+
+            # If trailing stop triggered, close in TV via market order
+            if self.paper.is_flat:
+                # paper.on_bar() closed the position internally (trail hit)
+                stopped_trade = self.paper.trades[-1] if self.paper.trades else None
+                if stopped_trade and stopped_trade.exit_reason == "trailing_stop":
+                    self._execute_close("trailing_stop", closing_side=pre_bar_side)
+                    self._log_trade(stopped_trade)
+            elif self.bar_count % 5 == 0:
+                # Redraw stop lines periodically to track trailing stop movement
+                self._draw_stop_lines()
 
         # Read replay status for TV position/PnL
         rep_status = self.bridge.replay_status()
@@ -562,6 +663,10 @@ class ReplayEngine:
             # Place SL + TP exit orders in TradingView (like real Floopbot)
             if atr > 0:
                 self._place_exit_orders(fill_price, atr, "LONG")
+                # TV handles SL/TP via orders — disable paper_trader checks
+                # Only trail remains managed internally
+                self.paper.position.stop_price = 0.0
+                self.paper.position.tp_price = 0.0
             self._draw_stop_lines()
         else:
             self.errors.append(f"Buy failed: {result.error}")
@@ -592,6 +697,9 @@ class ReplayEngine:
             # Place SL + TP exit orders in TradingView (like real Floopbot)
             if atr > 0:
                 self._place_exit_orders(fill_price, atr, "SHORT")
+                # TV handles SL/TP via orders — disable paper_trader checks
+                self.paper.position.stop_price = 0.0
+                self.paper.position.tp_price = 0.0
             self._draw_stop_lines()
         else:
             self.errors.append(f"Sell failed: {result.error}")
