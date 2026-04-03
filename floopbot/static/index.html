@@ -162,18 +162,16 @@ body {
 </div>
 
 <div class="controls">
-  <button class="btn btn-green" onclick="api('arm')">ARM</button>
-  <button class="btn btn-red" onclick="api('disarm')">DISARM</button>
+  <button class="btn btn-green" style="font-size:15px; padding:10px 28px;" onclick="runBacktest()">▶ RUN BACKTEST</button>
+  <button class="btn btn-red" style="font-size:15px; padding:10px 28px;" onclick="stopBacktest()">■ STOP</button>
   <button class="btn btn-yellow" onclick="api('flatten')">FLATTEN</button>
   <span style="width:20px"></span>
-  <button class="btn btn-purple" onclick="api('start-replay')">START REPLAY</button>
-  <button class="btn btn-gray" onclick="api('stop-replay')">STOP REPLAY</button>
-  <span style="width:20px"></span>
-  <button class="btn btn-blue" onclick="api('step')">STEP</button>
-  <button class="btn btn-blue" onclick="api('start-loop')">AUTO RUN</button>
-  <button class="btn btn-gray" onclick="api('stop-loop')">PAUSE</button>
-  <span style="width:20px"></span>
-  <button class="btn btn-sm btn-gray" onclick="checkConn()">CHECK CONNECTION</button>
+  <button class="btn btn-blue btn-sm" onclick="api('step')">STEP</button>
+  <button class="btn btn-sm btn-gray" onclick="api('arm')">ARM</button>
+  <button class="btn btn-sm btn-gray" onclick="api('disarm')">DISARM</button>
+  <button class="btn btn-sm btn-gray" onclick="api('start-replay')">START REPLAY</button>
+  <button class="btn btn-sm btn-gray" onclick="api('start-loop')">MONITOR</button>
+  <button class="btn btn-sm btn-gray" onclick="checkConn()">CHECK</button>
 </div>
 
 <div class="grid">
@@ -406,6 +404,19 @@ async function poll() {
     const data = await resp.json();
     updateDashboard(data);
   } catch(e) {}
+}
+
+async function runBacktest() {
+  const result = await api('run-backtest', {speed: 0});
+  if (result && !result.ok) {
+    alert('Failed to start backtest. Check errors panel.\n' + (result.errors || []).join('\n'));
+  }
+}
+
+async function stopBacktest() {
+  await api('stop-loop');
+  await api('disarm');
+  await api('stop-replay');
 }
 
 async function checkConn() {

@@ -175,11 +175,37 @@ class ReplayEngine:
             self._thread.join(timeout=5)
             self._thread = None
 
+    def run_backtest(self, speed: int = 0):
+        """
+        One-click backtest: arm, start autoplay, monitor for signals.
+        This is the main workflow the user wants.
+        """
+        # Arm the bot
+        self.armed = True
+
+        # Check if we're already in replay mode
+        status = self.bridge.replay_status()
+        if status.success:
+            self.replay_active = True
+            self._log_signal("SYSTEM", 0, "Replay mode detected")
+        else:
+            self._log_signal("SYSTEM", 0, "Starting replay mode...")
+            if not self.start_replay():
+                return False
+
+        # Start TradingView autoplay (fast-forward)
+        result = self.bridge.replay_autoplay(speed=speed)
+        if result.success:
+            self._log_signal("SYSTEM", 0, f"Autoplay started (speed={speed})")
+        else:
+            self._log_signal("SYSTEM", 0, f"Autoplay failed: {result.error} — try pressing play manually")
+
+        # Start monitoring loop
+        self.start_loop()
+        return True
+
     def step_once(self):
         """Advance one bar and process."""
-        if not self.replay_active:
-            self.errors.append("Replay not started — click START REPLAY first")
-            return
         result = self.bridge.replay_step()
         if not result.success:
             self.errors.append(f"Step failed: {result.error}")
@@ -189,7 +215,18 @@ class ReplayEngine:
         self.bar_count += 1
 
     def _run_loop(self):
-        """Background polling loop."""
+        """
+        Background monitoring loop.
+
+        In monitor mode (default): polls TradingView every 200ms for new
+        prices and signals. TradingView controls playback speed (user
+        presses play/fast-forward). The bot just watches and trades.
+
+        In step mode: bot controls playback, advancing one bar at a time.
+        """
+        self._log_signal("SYSTEM", 0, "Monitoring started — watching for signals...")
+        last_price = 0.0
+
         while not self._stop_event.is_set():
             try:
                 if self.config.step_mode:
@@ -203,15 +240,20 @@ class ReplayEngine:
                         time.sleep(0.5)
                         continue
                     time.sleep(0.1)
-                else:
-                    time.sleep(0.3)
 
                 self._poll_and_process()
-                self.bar_count += 1
+
+                # Only count as new bar if price changed
+                if self.last_price != last_price and self.last_price > 0:
+                    last_price = self.last_price
+                    self.bar_count += 1
 
                 if self.config.bars_to_run > 0 and self.bar_count >= self.config.bars_to_run:
                     self._log_signal("SYSTEM", 0, f"Bar limit reached ({self.config.bars_to_run})")
                     break
+
+                # Poll interval — fast enough to catch signals, light enough to not lag
+                time.sleep(0.2)
 
             except Exception as e:
                 self.errors.append(str(e))
@@ -441,6 +483,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         elif path == "/api/stop-replay":
             self.engine.stop_replay()
             self._json_response({"ok": True})
+        elif path == "/api/run-backtest":
+            speed = data.get("speed", 0)
+            ok = self.engine.run_backtest(speed=speed)
+            self._json_response({"ok": ok, "errors": self.engine.errors[-3:]})
         elif path == "/api/start-loop":
             self.engine.start_loop()
             self._json_response({"ok": True})
