@@ -662,8 +662,14 @@ class ReplayEngine:
         self._tp_price = tp_price
         self._sl_price = stop_price
 
-        # Click TP button on the position bar (canvas-rendered), then set price
+        # Debug: check what price labels are visible
         time.sleep(1.0)  # wait for position bar to render on chart
+        debug_labels = self.bridge._run_cli("ui", "eval",
+            "window._floop._debugPriceLabels()", timeout=8)
+        label_data = debug_labels.data.get("result", "?") if debug_labels.success else debug_labels.error
+        self._log_signal("DEBUG", 0, f"Price labels: {str(label_data)[:200]}")
+
+        # Click TP button on the position bar (canvas-rendered)
         tp_click = self.bridge._run_cli("ui", "eval",
             f"window._floop.clickPositionTP({fill_price})", timeout=8)
         tp_click_status = tp_click.data.get("result", "") if tp_click.success else tp_click.error

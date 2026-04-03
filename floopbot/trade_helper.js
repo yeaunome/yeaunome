@@ -337,28 +337,83 @@
     },
 
     _priceToY: function(price) {
-      // Use the price scale labels on the right to calculate Y for a price
-      var scale = document.querySelector('[class*=price-axis]') ||
-                  document.querySelector('[class*=priceAxis]');
-      if (!scale) return -1;
-      var labels = scale.querySelectorAll('[class*=label], [class*=priceLine]');
+      // Find price labels anywhere on the right side of the screen
+      // TradingView renders price axis labels as text in various elements
+      var screenW = window.innerWidth;
+      var rightEdge = screenW * 0.6; // price labels are on the right portion
       var points = [];
-      var all = scale.querySelectorAll('*');
+
+      // Search ALL leaf text nodes for price-like numbers on the right side
+      var all = document.querySelectorAll('*');
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
-        if (el.children.length > 0) continue;
-        var val = parseFloat((el.textContent || '').replace(/[,\s]/g, ''));
-        if (isNaN(val) || val < 100) continue;
+        if (el.children.length > 0) continue; // leaf only
+        if (!el.offsetParent) continue;
+        var text = (el.textContent || '').trim().replace(/[,\s]/g, '');
+        // Match price-like numbers (4+ digits, optional decimal)
+        if (!/^[0-9]{4,}(\.[0-9]+)?$/.test(text)) continue;
+        var val = parseFloat(text);
+        if (isNaN(val) || val < 1000) continue;
         var r = el.getBoundingClientRect();
-        if (r.height < 5 || r.height > 30) continue;
+        // Must be on the right side of the screen (price axis area)
+        if (r.left < rightEdge) continue;
+        // Must be reasonable size
+        if (r.height < 3 || r.height > 40) continue;
         points.push({price: val, y: r.top + r.height / 2});
       }
+
+      // Also check for canvas-overlay price labels that might be in SVG
+      if (points.length < 2) {
+        var svgTexts = document.querySelectorAll('text, tspan');
+        for (var i = 0; i < svgTexts.length; i++) {
+          var el = svgTexts[i];
+          var text = (el.textContent || '').trim().replace(/[,\s]/g, '');
+          if (!/^[0-9]{4,}(\.[0-9]+)?$/.test(text)) continue;
+          var val = parseFloat(text);
+          if (isNaN(val) || val < 1000) continue;
+          var r = el.getBoundingClientRect();
+          if (r.left < rightEdge) continue;
+          points.push({price: val, y: r.top + r.height / 2});
+        }
+      }
+
       if (points.length < 2) return -1;
-      points.sort(function(a, b) { return a.price - b.price; });
-      var lo = points[0], hi = points[points.length - 1];
+
+      // Deduplicate by Y proximity
+      points.sort(function(a, b) { return a.y - b.y; });
+      var unique = [points[0]];
+      for (var i = 1; i < points.length; i++) {
+        if (Math.abs(points[i].y - unique[unique.length - 1].y) > 5) {
+          unique.push(points[i]);
+        }
+      }
+      if (unique.length < 2) return -1;
+
+      // Linear interpolation from known price-Y pairs
+      var lo = unique[0], hi = unique[unique.length - 1];
       if (hi.price === lo.price) return -1;
       var pxPerPt = (lo.y - hi.y) / (hi.price - lo.price);
       return hi.y + (hi.price - price) * pxPerPt;
+    },
+
+    // Debug: report what price labels were found
+    _debugPriceLabels: function() {
+      var screenW = window.innerWidth;
+      var rightEdge = screenW * 0.6;
+      var found = [];
+      var all = document.querySelectorAll('*');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (el.children.length > 0) continue;
+        if (!el.offsetParent) continue;
+        var text = (el.textContent || '').trim().replace(/[,\s]/g, '');
+        if (!/^[0-9]{4,}(\.[0-9]+)?$/.test(text)) continue;
+        var r = el.getBoundingClientRect();
+        if (r.left < rightEdge) continue;
+        if (r.height < 3 || r.height > 40) continue;
+        found.push({val: text, x: Math.round(r.left), y: Math.round(r.top), tag: el.tagName});
+      }
+      return JSON.stringify(found.slice(0, 10));
     },
 
     // Click on the canvas at specific coordinates (simulates real mouse click)
