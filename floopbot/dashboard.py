@@ -616,7 +616,8 @@ class ReplayEngine:
 
     def _place_exit_orders(self, fill_price: float, atr: float, side: str):
         """
-        Place SL + TP orders in TradingView after market entry.
+        Place SL + TP on the position bar in TradingView after market entry.
+        Uses the TP/SL buttons that appear on the position line on the chart.
         Mirrors real Floopbot: Hard Stop (ATR×1.5), TP (flat 10pts).
         Trailing stop managed internally by paper_trader.
         """
@@ -626,34 +627,40 @@ class ReplayEngine:
         if side == "LONG":
             stop_price = round(fill_price - stop_dist, 2)
             tp_price = round(fill_price + tp_pts, 2)
-            exit_side = "Sell"
         else:
             stop_price = round(fill_price + stop_dist, 2)
             tp_price = round(fill_price - tp_pts, 2)
-            exit_side = "Buy"
 
         self._tp_price = tp_price
         self._sl_price = stop_price
 
-        # Place Stop Loss order
-        time.sleep(0.5)
-        sl_js = f"window._floop.placeStopOrder('{exit_side}', {stop_price})"
-        sl_result = self.bridge._run_cli("ui", "eval", sl_js, timeout=10)
-        sl_status = sl_result.data.get("result", "") if sl_result.success else sl_result.error
-        self._log_signal("SL", stop_price,
-                         f"Stop {exit_side} @ {stop_price:.2f} ({self.config.atr_stop_multiplier}×ATR) → {sl_status}")
+        # Click TP button on the position bar, then set price
+        time.sleep(0.8)  # wait for position bar to render
+        tp_click = self.bridge._run_cli("ui", "eval", "window._floop.clickPositionTP()", timeout=8)
+        tp_click_status = tp_click.data.get("result", "") if tp_click.success else tp_click.error
+        self._log_signal("TP", tp_price, f"TP button: {tp_click_status}")
 
-        # Place Take Profit order
-        time.sleep(0.5)
-        tp_js = f"window._floop.placeLimitOrder('{exit_side}', {tp_price})"
-        tp_result = self.bridge._run_cli("ui", "eval", tp_js, timeout=10)
-        tp_status = tp_result.data.get("result", "") if tp_result.success else tp_result.error
-        self._log_signal("TP", tp_price,
-                         f"Limit {exit_side} @ {tp_price:.2f} (+{tp_pts}pts) → {tp_status}")
+        if "clicked" in str(tp_click_status):
+            time.sleep(0.5)
+            tp_set = self.bridge._run_cli("ui", "eval",
+                f"window._floop.setTPSLPrice({tp_price})", timeout=8)
+            tp_set_status = tp_set.data.get("result", "") if tp_set.success else tp_set.error
+            self._log_signal("TP", tp_price,
+                f"TP @ {tp_price:.2f} (+{tp_pts}pts): {tp_set_status}")
 
-        # Reset order panel back to Market for next trade
-        time.sleep(0.3)
-        self.bridge._run_cli("ui", "eval", "window._floop.resetToMarket()", timeout=5)
+        # Click SL button on the position bar, then set price
+        time.sleep(0.5)
+        sl_click = self.bridge._run_cli("ui", "eval", "window._floop.clickPositionSL()", timeout=8)
+        sl_click_status = sl_click.data.get("result", "") if sl_click.success else sl_click.error
+        self._log_signal("SL", stop_price, f"SL button: {sl_click_status}")
+
+        if "clicked" in str(sl_click_status):
+            time.sleep(0.5)
+            sl_set = self.bridge._run_cli("ui", "eval",
+                f"window._floop.setTPSLPrice({stop_price})", timeout=8)
+            sl_set_status = sl_set.data.get("result", "") if sl_set.success else sl_set.error
+            self._log_signal("SL", stop_price,
+                f"SL @ {stop_price:.2f} ({self.config.atr_stop_multiplier}×ATR): {sl_set_status}")
 
     def _execute_buy(self, signal: FloopSignal, price: float, bar_time: str):
         """Execute a buy in TradingView replay with SL+TP, matching Floopbot strategy."""

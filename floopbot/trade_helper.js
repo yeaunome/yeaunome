@@ -258,7 +258,82 @@
       return 'price_set_' + price;
     },
 
-    // Place a Stop order (SL) — used for hard stop loss
+    // Click the TP button on the position bar (appears after entering a trade)
+    clickPositionTP: function() {
+      // Find the TP button on the chart position bar
+      var els = document.querySelectorAll('span, div, button');
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (!el.offsetParent) continue;
+        var text = el.textContent.trim();
+        if (text === 'TP' && el.children.length === 0) {
+          el.click();
+          return 'tp_clicked';
+        }
+      }
+      return 'tp_not_found';
+    },
+
+    // Click the SL button on the position bar
+    clickPositionSL: function() {
+      var els = document.querySelectorAll('span, div, button');
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (!el.offsetParent) continue;
+        var text = el.textContent.trim();
+        if (text === 'SL' && el.children.length === 0) {
+          el.click();
+          return 'sl_clicked';
+        }
+      }
+      return 'sl_not_found';
+    },
+
+    // Set the price on a TP/SL input that appears after clicking TP or SL
+    // TradingView shows an input field on the chart line when TP/SL is activated
+    setTPSLPrice: function(price) {
+      // After clicking TP or SL, an input appears on the chart for the price
+      var inputs = document.querySelectorAll('input');
+      var best = null;
+      for (var i = 0; i < inputs.length; i++) {
+        var inp = inputs[i];
+        if (!inp.offsetParent) continue;
+        var val = inp.value || '';
+        // Look for a price input (has digits with decimals, 4+ digits)
+        if (/^[0-9]{2,}/.test(val.replace(/[,.]/g, ''))) {
+          var rect = inp.getBoundingClientRect();
+          // Should be on the chart area (not in the order panel on the right)
+          if (rect.right < window.innerWidth * 0.8) {
+            best = inp;
+          }
+        }
+      }
+      // Also check inputs in any floating panel/popup near the chart
+      if (!best) {
+        for (var i = 0; i < inputs.length; i++) {
+          var inp = inputs[i];
+          if (!inp.offsetParent) continue;
+          var rect = inp.getBoundingClientRect();
+          // Any recently-appeared input in the middle of the screen
+          if (rect.top > 50 && rect.top < window.innerHeight * 0.8 &&
+              rect.left < window.innerWidth * 0.7) {
+            best = inp;
+            break;
+          }
+        }
+      }
+      if (!best) return 'tpsl_input_not_found';
+      var nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      nativeSet.call(best, String(price));
+      best.dispatchEvent(new Event('input', {bubbles: true}));
+      best.dispatchEvent(new Event('change', {bubbles: true}));
+      // Press Enter to confirm
+      best.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
+      best.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
+      return 'tpsl_price_set_' + price;
+    },
+
+    // Legacy: Place a Stop order via order panel tabs (fallback)
     placeStopOrder: function(side, price) {
       var r1 = this.selectSide(side);
       var r2 = this.selectOrderType('Stop');
@@ -267,7 +342,7 @@
       return 'stop|' + r1 + '|' + r2 + '|' + r3 + '|' + r4;
     },
 
-    // Place a Limit order (TP) — used for take profit
+    // Legacy: Place a Limit order via order panel tabs (fallback)
     placeLimitOrder: function(side, price) {
       var r1 = this.selectSide(side);
       var r2 = this.selectOrderType('Limit');
