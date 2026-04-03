@@ -10,6 +10,7 @@ Provides:
 
 import json
 import os
+import random
 import sys
 import threading
 import time
@@ -249,41 +250,22 @@ class ReplayEngine:
         self.bridge.set_timeframe("1")
         time.sleep(1.5)
 
-        # ── Step 3: Click "Random Bar" (two-step: open dropdown, then click) ──
-        self._log_signal("SYSTEM", 0, "3/6 Selecting Random Bar...")
-
-        # First probe what's visible so we know the state
-        probe = self.bridge._run_cli("ui", "eval",
-            "window._floop.probeAllReplayText()", timeout=8)
-        probe_data = probe.data.get("result", "?") if probe.success else probe.error
-        self._log_signal("DEBUG", 0, f"Replay UI: {str(probe_data)[:400]}")
-
-        # Step 3a: Open the "SELECT STARTING POINT" dropdown
-        dropdown_result = self.bridge._run_cli("ui", "eval",
-            "window._floop.openStartingPointDropdown()", timeout=8)
-        dropdown_status = dropdown_result.data.get("result", "?") if dropdown_result.success else "failed"
-        self._log_signal("SYSTEM", 0, f"  Dropdown: {dropdown_status}")
-        time.sleep(1.5)  # Wait for dropdown to appear
-
-        # Probe again after opening dropdown
-        probe2 = self.bridge._run_cli("ui", "eval",
-            "window._floop.probeAllReplayText()", timeout=8)
-        probe2_data = probe2.data.get("result", "?") if probe2.success else probe2.error
-        self._log_signal("DEBUG", 0, f"After dropdown: {str(probe2_data)[:400]}")
-
-        # Step 3b: Click "Random bar" from the dropdown
-        random_result = self.bridge._run_cli("ui", "eval",
-            "window._floop.clickRandomBar()", timeout=8)
-        random_status = random_result.data.get("result", "?") if random_result.success else "failed"
-        self._log_signal("SYSTEM", 0, f"  Random bar: {random_status}")
-
-        if "not_found" in str(random_status):
-            # Last resort: use replay start API
-            self._log_signal("SYSTEM", 0, "  Random Bar not found — using API start")
-            self.start_replay()
+        # ── Step 3: Start replay at a random date ──
+        # DOM-based "Random bar" button is unreliable. Instead, generate a
+        # random date in the last ~2 years and use the replay start API.
+        self._log_signal("SYSTEM", 0, "3/6 Starting replay at random date...")
+        from datetime import datetime, timedelta
+        today = datetime.now()
+        # Random date between 2 years ago and 30 days ago
+        days_back = random.randint(30, 730)
+        random_date = (today - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        self._log_signal("SYSTEM", 0, f"  Random date: {random_date}")
+        start_result = self.bridge.replay_start(date=random_date)
+        start_status = start_result.data if start_result.success else start_result.error
+        self._log_signal("SYSTEM", 0, f"  Replay start: {start_status}")
 
         self.replay_active = True
-        time.sleep(3)  # Wait for chart to load after random bar selection
+        time.sleep(3)  # Wait for chart to load
 
         # ── Step 4: Switch to 5m timeframe (for FLOOP Pro signals) ──
         self._log_signal("SYSTEM", 0, f"4/6 Setting {self.config.timeframe}m timeframe for FLOOP Pro...")
@@ -499,19 +481,21 @@ class ReplayEngine:
         # Detect when TV's SL/TP orders execute (position closed without our knowledge)
         self._sync_tv_position()
 
-        # ── Step 2: Internal trailing stop management ──
-        # Only manage trailing stop internally (SL and TP are TV orders)
+        # ── Step 2: Internal stop management (SL + Trail) ──
+        # SL and trailing stop are managed by paper_trader internally.
+        # TP is handled by TV limit order.
         if not self.paper.is_flat:
             pre_bar_side = self.position_side
-            # Update trail and excursions, but skip TP/SL check (TV handles those)
             self.paper.on_bar(high, low, self.last_price, bar_time)
 
-            # If trailing stop triggered, close in TV via market order
+            # If paper_trader closed the position (SL, trail, or daily limit hit)
             if self.paper.is_flat:
-                # paper.on_bar() closed the position internally (trail hit)
                 stopped_trade = self.paper.trades[-1] if self.paper.trades else None
-                if stopped_trade and stopped_trade.exit_reason == "trailing_stop":
-                    self._execute_close("trailing_stop", closing_side=pre_bar_side)
+                if stopped_trade:
+                    reason = stopped_trade.exit_reason
+                    self._log_signal("CLOSE", stopped_trade.exit_price,
+                        f"{reason} | P&L: ${stopped_trade.pnl_dollars:.2f}")
+                    self._execute_close(reason, closing_side=pre_bar_side)
                     self._log_trade(stopped_trade)
             elif self.bar_count % 5 == 0:
                 # Redraw stop lines periodically to track trailing stop movement
@@ -700,10 +684,12 @@ class ReplayEngine:
 
     def _place_exit_orders(self, fill_price: float, atr: float, side: str):
         """
-        Place SL + TP as separate Stop/Limit orders via the order panel.
-        Canvas-based TP/SL buttons don't work (they're rendered on canvas).
-        Instead: place a Sell Stop (SL) + Sell Limit (TP) for longs,
-        or Buy Stop (SL) + Buy Limit (TP) for shorts.
+        Place TP as a Limit order in TradingView. SL is managed internally
+        by paper_trader (Stop orders via order panel are unreliable).
+
+        - TP: Sell Limit (long) or Buy Limit (short) — TV executes this
+        - SL: paper_trader checks on each bar, closes via opposite market order
+        - Trail: paper_trader manages internally
         """
         stop_dist = atr * self.config.atr_stop_multiplier
         tp_pts = self.config.flat_tp_pts
@@ -711,37 +697,31 @@ class ReplayEngine:
         if side == "LONG":
             stop_price = round(fill_price - stop_dist, 2)
             tp_price = round(fill_price + tp_pts, 2)
-            sl_side = "Sell"
             tp_side = "Sell"
         else:
             stop_price = round(fill_price + stop_dist, 2)
             tp_price = round(fill_price - tp_pts, 2)
-            sl_side = "Buy"
             tp_side = "Buy"
 
         self._tp_price = tp_price
         self._sl_price = stop_price
 
-        # Place SL as a Stop order
+        # Place TP as a Limit order in TV (this works reliably)
         time.sleep(0.5)
-        sl_result = self.bridge._run_cli("ui", "eval",
-            f"window._floop.placeStopOrder('{sl_side}', {stop_price})", timeout=10)
-        sl_status = sl_result.data.get("result", "") if sl_result.success else sl_result.error
-        self._log_signal("SL", stop_price,
-            f"SL @ {stop_price:.2f} ({self.config.atr_stop_multiplier}×ATR): {sl_status}")
-        time.sleep(0.8)
-
-        # Place TP as a Limit order
         tp_result = self.bridge._run_cli("ui", "eval",
             f"window._floop.placeLimitOrder('{tp_side}', {tp_price})", timeout=10)
         tp_status = tp_result.data.get("result", "") if tp_result.success else tp_result.error
         self._log_signal("TP", tp_price,
-            f"TP @ {tp_price:.2f} (+{tp_pts}pts): {tp_status}")
+            f"TP @ {tp_price:.2f} (+{tp_pts}pts) [TV Limit]: {tp_status}")
         time.sleep(0.5)
 
         # Switch back to Market order type for next trade
         self.bridge._run_cli("ui", "eval",
             "window._floop.resetToMarket()", timeout=5)
+
+        # SL managed internally by paper_trader — log it
+        self._log_signal("SL", stop_price,
+            f"SL @ {stop_price:.2f} ({self.config.atr_stop_multiplier}×ATR) [internal]")
 
     def _execute_buy(self, signal: FloopSignal, price: float, bar_time: str):
         """Execute a buy in TradingView replay with SL+TP, matching Floopbot strategy."""
@@ -763,12 +743,11 @@ class ReplayEngine:
                              f"Long @ {fill_price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
                              else f"Long @ {fill_price:.2f} | NO ATR — no stop set!")
 
-            # Place SL + TP exit orders in TradingView (like real Floopbot)
+            # Place TP in TV, keep SL in paper_trader
             if atr > 0:
                 self._place_exit_orders(fill_price, atr, "LONG")
-                # TV handles SL/TP via orders — disable paper_trader checks
-                # Only trail remains managed internally
-                self.paper.position.stop_price = 0.0
+                # TV handles TP via limit order — disable paper_trader TP check
+                # SL + Trail remain managed internally by paper_trader
                 self.paper.position.tp_price = 0.0
             self._draw_stop_lines()
         else:
@@ -797,11 +776,11 @@ class ReplayEngine:
                              f"Short @ {fill_price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
                              else f"Short @ {fill_price:.2f} | NO ATR — no stop set!")
 
-            # Place SL + TP exit orders in TradingView (like real Floopbot)
+            # Place TP in TV, keep SL in paper_trader
             if atr > 0:
                 self._place_exit_orders(fill_price, atr, "SHORT")
-                # TV handles SL/TP via orders — disable paper_trader checks
-                self.paper.position.stop_price = 0.0
+                # TV handles TP via limit order — disable paper_trader TP check
+                # SL + Trail remain managed internally by paper_trader
                 self.paper.position.tp_price = 0.0
             self._draw_stop_lines()
         else:
