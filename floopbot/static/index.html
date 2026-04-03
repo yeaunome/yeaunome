@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FLOOP BOT - Replay Tester</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: #0a0e17;
+  color: #c8d0e0;
+  min-height: 100vh;
+}
+.header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid #1a2035;
+}
+.header h1 { font-size: 22px; font-weight: 700; }
+.header h1 span { color: #6366f1; }
+.header .mode { color: #94a3b8; font-size: 14px; font-weight: 400; }
+.header .clock { color: #94a3b8; font-size: 14px; }
+.header .symbol { color: #e2e8f0; font-weight: 600; }
+
+.status-badges {
+  display: flex; gap: 12px; padding: 12px 24px;
+}
+.badge {
+  padding: 6px 16px; border-radius: 20px; font-size: 13px;
+  font-weight: 600; letter-spacing: 0.5px;
+}
+.badge.armed { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid #22c55e; }
+.badge.disarmed { background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid #ef4444; }
+.badge.connected { background: rgba(99,102,241,0.15); color: #818cf8; border: 1px solid #818cf8; }
+.badge.replay { background: rgba(234,179,8,0.15); color: #eab308; border: 1px solid #eab308; }
+.badge.flat { background: rgba(148,163,184,0.15); color: #94a3b8; border: 1px solid #475569; }
+
+.controls {
+  display: flex; gap: 10px; padding: 8px 24px 16px;
+  flex-wrap: wrap;
+}
+.btn {
+  padding: 8px 20px; border: none; border-radius: 6px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: all 0.15s;
+}
+.btn:hover { filter: brightness(1.2); }
+.btn:active { transform: scale(0.97); }
+.btn-green { background: #22c55e; color: #0a0e17; }
+.btn-red { background: #ef4444; color: white; }
+.btn-yellow { background: #eab308; color: #0a0e17; }
+.btn-blue { background: #3b82f6; color: white; }
+.btn-purple { background: #8b5cf6; color: white; }
+.btn-gray { background: #334155; color: #e2e8f0; }
+.btn-sm { padding: 5px 12px; font-size: 12px; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px; padding: 0 24px 12px;
+}
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+
+.card {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 16px;
+}
+.card .label {
+  font-size: 11px; text-transform: uppercase;
+  letter-spacing: 1px; color: #64748b;
+  margin-bottom: 6px;
+}
+.card .value {
+  font-size: 28px; font-weight: 700; color: #e2e8f0;
+}
+.card .value.sm { font-size: 18px; }
+.card .sub { font-size: 12px; color: #64748b; margin-top: 2px; }
+.green { color: #22c55e !important; }
+.red { color: #ef4444 !important; }
+.yellow { color: #eab308 !important; }
+.purple { color: #a78bfa !important; }
+
+.position-card {
+  background: #111827; border: 1px solid #1e293b;
+  border-radius: 10px; padding: 20px; margin: 0 24px 12px;
+  text-align: center;
+}
+.position-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 8px; }
+.position-card .pos-text { font-size: 16px; color: #94a3b8; }
+.position-card .pos-text.long { color: #22c55e; font-weight: 700; font-size: 20px; }
+.position-card .pos-text.short { color: #ef4444; font-weight: 700; font-size: 20px; }
+
+.logs {
+  margin: 0 24px 12px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+.log-panel {
+  background: #111827; border: 1px solid #1e293b;
+  border-radius: 10px; padding: 16px;
+  max-height: 300px; overflow-y: auto;
+}
+.log-panel h3 {
+  font-size: 12px; text-transform: uppercase;
+  letter-spacing: 1px; color: #64748b;
+  margin-bottom: 10px;
+}
+.log-entry {
+  font-size: 12px; padding: 4px 0;
+  border-bottom: 1px solid #1e293b;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+.log-entry .time { color: #475569; }
+.log-entry .side-long { color: #22c55e; font-weight: 600; }
+.log-entry .side-short { color: #ef4444; font-weight: 600; }
+.log-entry .side-system { color: #eab308; }
+.log-entry .side-skip { color: #64748b; }
+.log-entry .pnl-pos { color: #22c55e; }
+.log-entry .pnl-neg { color: #ef4444; }
+
+.config-panel {
+  margin: 0 24px 24px;
+  background: #111827; border: 1px solid #1e293b;
+  border-radius: 10px; padding: 16px;
+}
+.config-panel h3 {
+  font-size: 12px; text-transform: uppercase;
+  letter-spacing: 1px; color: #64748b;
+  margin-bottom: 12px; cursor: pointer;
+}
+.config-row {
+  display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+}
+.config-row label {
+  font-size: 12px; color: #94a3b8;
+  display: flex; align-items: center; gap: 6px;
+}
+.config-row input {
+  width: 70px; padding: 4px 8px;
+  background: #0a0e17; border: 1px solid #334155;
+  border-radius: 4px; color: #e2e8f0; font-size: 13px;
+}
+.config-row input:focus { outline: none; border-color: #6366f1; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>FLOOP <span>BOT</span> <span class="mode">REPLAY TESTER</span></h1>
+  <div>
+    <span class="symbol" id="hdr-symbol">—</span>
+    <span class="clock" id="hdr-clock">—</span>
+  </div>
+</div>
+
+<div class="status-badges" id="badges">
+  <span class="badge disarmed" id="badge-armed">DISARMED</span>
+  <span class="badge flat" id="badge-replay">REPLAY OFF</span>
+  <span class="badge flat" id="badge-position">FLAT</span>
+</div>
+
+<div class="controls">
+  <button class="btn btn-green" onclick="api('arm')">ARM</button>
+  <button class="btn btn-red" onclick="api('disarm')">DISARM</button>
+  <button class="btn btn-yellow" onclick="api('flatten')">FLATTEN</button>
+  <span style="width:20px"></span>
+  <button class="btn btn-purple" onclick="api('start-replay')">START REPLAY</button>
+  <button class="btn btn-gray" onclick="api('stop-replay')">STOP REPLAY</button>
+  <span style="width:20px"></span>
+  <button class="btn btn-blue" onclick="api('step')">STEP</button>
+  <button class="btn btn-blue" onclick="api('start-loop')">AUTO RUN</button>
+  <button class="btn btn-gray" onclick="api('stop-loop')">PAUSE</button>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <div class="label">Last Price</div>
+    <div class="value" id="last-price">—</div>
+    <div class="sub" id="bar-count">—</div>
+  </div>
+  <div class="card">
+    <div class="label">Day P&L</div>
+    <div class="value" id="daily-pnl">$0</div>
+    <div class="sub" id="daily-trades">0 trades today</div>
+  </div>
+  <div class="card">
+    <div class="label">Daily Loss Used</div>
+    <div class="value sm" id="daily-loss-pct">0%</div>
+    <div class="sub" id="daily-loss-sub">$0 / $1200</div>
+  </div>
+  <div class="card">
+    <div class="label">Total P&L</div>
+    <div class="value" id="total-pnl">$0</div>
+    <div class="sub" id="total-trades">0 trades</div>
+  </div>
+</div>
+
+<div class="grid grid-3">
+  <div class="card">
+    <div class="label">Wins Today</div>
+    <div class="value green" id="wins">0</div>
+  </div>
+  <div class="card">
+    <div class="label">Losses Today</div>
+    <div class="value red" id="losses">0</div>
+  </div>
+  <div class="card">
+    <div class="label">Win Rate</div>
+    <div class="value" id="win-rate">—</div>
+    <div class="sub" id="win-loss-sub">0W / 0L</div>
+  </div>
+</div>
+
+<div class="grid grid-3">
+  <div class="card">
+    <div class="label">ATR Stop Multiplier</div>
+    <div class="value sm" id="atr-mult">1.5x</div>
+  </div>
+  <div class="card">
+    <div class="label">Trail Distance</div>
+    <div class="value sm" id="trail-dist">1x ATR</div>
+    <div class="sub" id="trail-mode">adaptive</div>
+  </div>
+  <div class="card">
+    <div class="label">Min Signal Strength</div>
+    <div class="value sm" id="min-str">8/14</div>
+    <div class="sub">out of 14</div>
+  </div>
+</div>
+
+<div class="position-card">
+  <div class="label">Open Position</div>
+  <div class="pos-text" id="position-text">— FLAT — No open position</div>
+</div>
+
+<div class="logs">
+  <div class="log-panel" id="signal-log">
+    <h3>Signal Log</h3>
+  </div>
+  <div class="log-panel" id="trade-log">
+    <h3>Trade Log</h3>
+  </div>
+</div>
+
+<div class="config-panel">
+  <h3 onclick="document.getElementById('config-body').style.display = document.getElementById('config-body').style.display === 'none' ? 'flex' : 'none'">
+    Settings (click to expand)
+  </h3>
+  <div class="config-row" id="config-body" style="display:none">
+    <label>Min Strength <input type="number" id="cfg-strength" min="1" max="14" value="8"></label>
+    <label>ATR Stop <input type="number" id="cfg-atr" step="0.1" min="0.5" max="5" value="1.5"></label>
+    <label>Trail ATR <input type="number" id="cfg-trail" step="0.1" min="0.5" max="5" value="1.0"></label>
+    <label>Max Loss $ <input type="number" id="cfg-maxloss" step="100" min="100" value="1200"></label>
+    <button class="btn btn-sm btn-purple" onclick="saveConfig()">Apply</button>
+  </div>
+</div>
+
+<script>
+const API = '';
+
+async function api(endpoint, data) {
+  try {
+    const resp = await fetch(API + '/api/' + endpoint, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: data ? JSON.stringify(data) : '{}',
+    });
+    return await resp.json();
+  } catch(e) { console.error(e); }
+}
+
+function saveConfig() {
+  api('config', {
+    min_signal_strength: parseInt(document.getElementById('cfg-strength').value),
+    atr_stop_multiplier: parseFloat(document.getElementById('cfg-atr').value),
+    trail_distance_atr: parseFloat(document.getElementById('cfg-trail').value),
+    max_daily_loss: parseFloat(document.getElementById('cfg-maxloss').value),
+  });
+}
+
+function fmt$(v) {
+  if (v === 0) return '$0';
+  return (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2);
+}
+
+function sideClass(side) {
+  if (['LONG','BUY'].includes(side)) return 'side-long';
+  if (['SHORT','SELL'].includes(side)) return 'side-short';
+  if (side === 'SYSTEM') return 'side-system';
+  return 'side-skip';
+}
+
+function updateDashboard(s) {
+  // Header
+  document.getElementById('hdr-symbol').textContent = s.symbol + ' - ' + s.timeframe + 'm';
+  document.getElementById('hdr-clock').textContent = s.timestamp;
+
+  // Badges
+  const armed = document.getElementById('badge-armed');
+  armed.textContent = s.armed ? 'ARMED' : 'DISARMED';
+  armed.className = 'badge ' + (s.armed ? 'armed' : 'disarmed');
+
+  const replay = document.getElementById('badge-replay');
+  replay.textContent = s.replay_active ? (s.running ? 'RUNNING' : 'REPLAY ON') : 'REPLAY OFF';
+  replay.className = 'badge ' + (s.replay_active ? 'replay' : 'flat');
+
+  const pos = document.getElementById('badge-position');
+  pos.textContent = s.position;
+  pos.className = 'badge ' + (s.position === 'LONG' ? 'armed' : s.position === 'SHORT' ? 'disarmed' : 'flat');
+
+  // Cards
+  document.getElementById('last-price').textContent = s.last_price ? s.last_price.toFixed(2) : '—';
+  document.getElementById('bar-count').textContent = s.bar_count > 0 ? `Bar ${s.bar_count} | ${s.elapsed}s` : '—';
+
+  const dpnl = document.getElementById('daily-pnl');
+  dpnl.textContent = fmt$(s.daily_pnl);
+  dpnl.className = 'value ' + (s.daily_pnl > 0 ? 'green' : s.daily_pnl < 0 ? 'red' : '');
+
+  document.getElementById('daily-trades').textContent = s.daily_trades + ' trades today';
+
+  const pct = s.max_daily_loss > 0 ? Math.round(Math.abs(s.daily_pnl) / s.max_daily_loss * 100) : 0;
+  document.getElementById('daily-loss-pct').textContent = pct + '%';
+  document.getElementById('daily-loss-sub').textContent = '$' + Math.abs(s.daily_pnl).toFixed(0) + ' / $' + s.max_daily_loss;
+
+  const tpnl = document.getElementById('total-pnl');
+  tpnl.textContent = fmt$(s.total_pnl);
+  tpnl.className = 'value ' + (s.total_pnl > 0 ? 'green' : s.total_pnl < 0 ? 'red' : '');
+  document.getElementById('total-trades').textContent = s.total_trades + ' trades';
+
+  document.getElementById('wins').textContent = s.daily_wins;
+  document.getElementById('losses').textContent = s.daily_losses;
+
+  const wr = document.getElementById('win-rate');
+  wr.textContent = s.win_rate > 0 ? s.win_rate + '%' : '—';
+  document.getElementById('win-loss-sub').textContent = s.wins + 'W / ' + s.losses + 'L';
+
+  document.getElementById('atr-mult').textContent = s.atr_stop_multiplier + 'x';
+  document.getElementById('trail-dist').textContent = s.trail_distance_atr + 'x ATR';
+  document.getElementById('trail-mode').textContent = s.trail_mode;
+  document.getElementById('min-str').textContent = s.min_signal_strength + '/14';
+
+  // Position card
+  const pt = document.getElementById('position-text');
+  if (s.position === 'FLAT') {
+    pt.textContent = '— FLAT — No open position';
+    pt.className = 'pos-text';
+  } else {
+    const upnl = fmt$(s.unrealized_pnl);
+    pt.textContent = s.position + ' @ ' + s.position_entry.toFixed(2) + ' | Unrealized: ' + upnl;
+    pt.className = 'pos-text ' + s.position.toLowerCase();
+  }
+
+  // Signal log
+  const sl = document.getElementById('signal-log');
+  let slHtml = '<h3>Signal Log</h3>';
+  const signals = (s.signal_log || []).slice().reverse();
+  for (const e of signals) {
+    slHtml += `<div class="log-entry"><span class="time">${e.time}</span> <span class="${sideClass(e.side)}">${e.side}</span> ${e.price > 0 ? '@ ' + e.price.toFixed(2) : ''} ${e.msg}</div>`;
+  }
+  sl.innerHTML = slHtml;
+
+  // Trade log
+  const tl = document.getElementById('trade-log');
+  let tlHtml = '<h3>Trade Log</h3>';
+  const trades = (s.trade_log || []).slice().reverse();
+  for (const t of trades) {
+    const cls = t.pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    tlHtml += `<div class="log-entry"><span class="${sideClass(t.side)}">#${t.id} ${t.side}</span> ${t.entry.toFixed(2)} → ${t.exit.toFixed(2)} <span class="${cls}">${fmt$(t.pnl)}</span> (${t.ticks}t) ${t.reason}</div>`;
+  }
+  tl.innerHTML = tlHtml;
+}
+
+async function poll() {
+  try {
+    const resp = await fetch(API + '/api/status');
+    const data = await resp.json();
+    updateDashboard(data);
+  } catch(e) {}
+}
+
+setInterval(poll, 500);
+poll();
+</script>
+</body>
+</html>
