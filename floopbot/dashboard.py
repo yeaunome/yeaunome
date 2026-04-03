@@ -358,6 +358,10 @@ class ReplayEngine:
             self._log_signal("SYNC", self.last_price,
                              f"TV position went FLAT — {exit_reason} (was {self.position_side})")
 
+            # Cancel any remaining pending orders (e.g. SL still active after TP hit)
+            self.bridge._run_cli("ui", "eval",
+                "window._floop.cancelAllOrders()", timeout=5)
+
             # Close internal position to match TV
             if not self.paper.is_flat:
                 trade = self.paper.flatten(self.last_price, self.last_bar_time)
@@ -712,7 +716,14 @@ class ReplayEngine:
 
         was_autoplaying = self._pause_autoplay()
 
-        # In TradingView replay, close = opposite trade (sell to close long, buy to close short)
+        # Cancel pending TP/SL orders first so they don't fire after close
+        cancel_result = self.bridge._run_cli("ui", "eval",
+            "window._floop.cancelAllOrders()", timeout=5)
+        cancel_status = cancel_result.data.get("result", "") if cancel_result.success else cancel_result.error
+        self._log_signal("DEBUG", 0, f"Cancel pending orders: {cancel_status}")
+        time.sleep(0.3)
+
+        # Close = opposite trade (sell to close long, buy to close short)
         if side == "LONG":
             result = self.bridge.replay_trade("sell")
             action = "sell-to-close"

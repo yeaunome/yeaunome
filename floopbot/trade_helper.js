@@ -754,6 +754,45 @@
       return JSON.stringify(results.slice(0, 15));
     },
 
+    // Cancel all pending orders (limit/stop) by clicking cancel/X buttons
+    cancelAllOrders: function() {
+      var cancelled = 0;
+      // Look for cancel/X buttons on pending orders in the trade list
+      // TradingView shows pending orders with a cancel (X) button
+      var btns = document.querySelectorAll('button, [class*=cancel], [class*=close], [data-name*=cancel]');
+      for (var i = 0; i < btns.length; i++) {
+        var btn = btns[i];
+        if (!btn.offsetParent) continue;
+        var dn = btn.getAttribute('data-name') || '';
+        var title = btn.getAttribute('title') || '';
+        var ariaLabel = btn.getAttribute('aria-label') || '';
+        // Match cancel order buttons
+        if (/cancel.*order|remove.*order|delete.*order/i.test(dn + title + ariaLabel)) {
+          btn.click();
+          cancelled++;
+        }
+      }
+      // Also try: find X buttons near limit/stop order rows
+      if (cancelled === 0) {
+        var rows = document.querySelectorAll('[class*=order], [class*=pending]');
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          if (!row.offsetParent) continue;
+          var text = (row.textContent || '').toLowerCase();
+          if (/limit|stop/i.test(text)) {
+            var xBtns = row.querySelectorAll('button, [class*=cancel], [class*=close]');
+            for (var j = 0; j < xBtns.length; j++) {
+              if (xBtns[j].offsetParent) {
+                xBtns[j].click();
+                cancelled++;
+              }
+            }
+          }
+        }
+      }
+      return 'cancelled:' + cancelled;
+    },
+
     // Dismiss dialogs (Stay on "Leave current replay?")
     dismissDialog: function() {
       var btns = document.querySelectorAll('button');
