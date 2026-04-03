@@ -79,36 +79,61 @@
       var panel = document.querySelector('[class*=orderWidget], [class*=orderTicket], [class*=orderPanel]');
       var searchIn = panel || document;
       var inputs = searchIn.querySelectorAll('input');
+      var target = null;
+
+      // Strategy 1: Find input near "Units" label
       for (var i = 0; i < inputs.length; i++) {
         var inp = inputs[i];
         if (!inp.offsetParent) continue;
-        // Find the Units field — small number, often near "Units" label
-        var parent = inp.closest('[class*=row], [class*=field], [class*=group]') || inp.parentElement;
-        var parentText = (parent && parent.textContent) || '';
-        if (/units|qty|quantity|size/i.test(parentText)) {
-          var nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          nativeSet.call(inp, String(qty));
-          inp.dispatchEvent(new Event('input', {bubbles: true}));
-          inp.dispatchEvent(new Event('change', {bubbles: true}));
-          inp.dispatchEvent(new Event('blur', {bubbles: true}));
-          return 'qty_set_' + qty;
+        // Walk up to find "Units" text nearby
+        var el = inp;
+        for (var depth = 0; depth < 5 && el; depth++) {
+          el = el.parentElement;
+          if (el && /\bUnits\b/i.test(el.textContent || '')) {
+            target = inp;
+            break;
+          }
+        }
+        if (target) break;
+      }
+
+      // Strategy 2: Find input with small integer (1-99) that's NOT a price
+      if (!target) {
+        for (var i = 0; i < inputs.length; i++) {
+          var inp = inputs[i];
+          if (!inp.offsetParent) continue;
+          var val = inp.value || '';
+          var num = parseInt(val);
+          if (num > 0 && num < 100 && val.indexOf('.') === -1) {
+            target = inp;
+            break;
+          }
         }
       }
-      // Fallback: find input with a small integer value (1-99)
-      for (var i = 0; i < inputs.length; i++) {
-        var inp = inputs[i];
-        if (!inp.offsetParent) continue;
-        var val = parseInt(inp.value);
-        if (val > 0 && val < 100) {
-          var nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          nativeSet.call(inp, String(qty));
-          inp.dispatchEvent(new Event('input', {bubbles: true}));
-          inp.dispatchEvent(new Event('change', {bubbles: true}));
-          inp.dispatchEvent(new Event('blur', {bubbles: true}));
-          return 'qty_set_fallback_' + qty;
-        }
-      }
-      return 'qty_input_not_found';
+
+      if (!target) return 'qty_input_not_found';
+
+      // Focus, select all, then simulate keystrokes to set value
+      target.focus();
+      target.select();
+      // Clear existing value
+      target.dispatchEvent(new KeyboardEvent('keydown', {key: 'a', code: 'KeyA', ctrlKey: true, bubbles: true}));
+
+      // Use native setter + multiple event types for React compatibility
+      var nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      nativeSet.call(target, String(qty));
+      target.dispatchEvent(new Event('input', {bubbles: true}));
+      target.dispatchEvent(new Event('change', {bubbles: true}));
+
+      // Also try React's synthetic event approach
+      var tracker = target._valueTracker;
+      if (tracker) { tracker.setValue(''); }
+      target.value = String(qty);
+      target.dispatchEvent(new Event('input', {bubbles: true}));
+
+      // Blur to confirm
+      target.dispatchEvent(new Event('blur', {bubbles: true}));
+      return 'qty_set_' + qty + '_was_' + (target.value);
     },
 
     // Click Market order type
@@ -260,77 +285,94 @@
 
     // Click the TP button on the position bar (appears after entering a trade)
     clickPositionTP: function() {
-      // Find the TP button on the chart position bar
-      var els = document.querySelectorAll('span, div, button');
-      for (var i = 0; i < els.length; i++) {
-        var el = els[i];
-        if (!el.offsetParent) continue;
-        var text = el.textContent.trim();
-        if (text === 'TP' && el.children.length === 0) {
-          el.click();
-          return 'tp_clicked';
-        }
-      }
-      return 'tp_not_found';
+      return this._clickPositionButton('TP');
     },
 
     // Click the SL button on the position bar
     clickPositionSL: function() {
-      var els = document.querySelectorAll('span, div, button');
-      for (var i = 0; i < els.length; i++) {
-        var el = els[i];
+      return this._clickPositionButton('SL');
+    },
+
+    // Generic: find and click a button on the chart position bar
+    _clickPositionButton: function(label) {
+      // Strategy 1: Search ALL visible elements for exact text match
+      var all = document.querySelectorAll('*');
+      var candidates = [];
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
         if (!el.offsetParent) continue;
+        // Must be leaf or near-leaf with exact text
         var text = el.textContent.trim();
-        if (text === 'SL' && el.children.length === 0) {
-          el.click();
-          return 'sl_clicked';
-        }
+        if (text !== label) continue;
+        // Prefer elements with no children or only text children
+        if (el.children.length > 2) continue;
+        var rect = el.getBoundingClientRect();
+        // Must be on the chart (not in sidepanel), not too small
+        if (rect.width < 10 || rect.height < 10) continue;
+        if (rect.left > window.innerWidth * 0.75) continue; // not in order panel
+        candidates.push({el: el, rect: rect, tag: el.tagName, cls: el.className});
       }
-      return 'sl_not_found';
+      if (candidates.length === 0) return label.toLowerCase() + '_not_found_0_candidates';
+
+      // Click the best candidate — prefer ones with smaller bounding box (more specific)
+      candidates.sort(function(a, b) {
+        return (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height);
+      });
+      var best = candidates[0];
+      best.el.click();
+      return label.toLowerCase() + '_clicked:' + best.tag + ':' + (typeof best.cls === 'string' ? best.cls.substring(0, 30) : '');
     },
 
     // Set the price on a TP/SL input that appears after clicking TP or SL
-    // TradingView shows an input field on the chart line when TP/SL is activated
     setTPSLPrice: function(price) {
-      // After clicking TP or SL, an input appears on the chart for the price
+      // After clicking TP or SL, TradingView shows a price input on the chart
+      // It could be an input field, or an editable element
       var inputs = document.querySelectorAll('input');
-      var best = null;
+      var candidates = [];
+
       for (var i = 0; i < inputs.length; i++) {
         var inp = inputs[i];
         if (!inp.offsetParent) continue;
+        var rect = inp.getBoundingClientRect();
+        // Must be on the chart area (not in the order panel on the right)
+        if (rect.left > window.innerWidth * 0.75) continue;
         var val = inp.value || '';
-        // Look for a price input (has digits with decimals, 4+ digits)
-        if (/^[0-9]{2,}/.test(val.replace(/[,.]/g, ''))) {
-          var rect = inp.getBoundingClientRect();
-          // Should be on the chart area (not in the order panel on the right)
-          if (rect.right < window.innerWidth * 0.8) {
-            best = inp;
-          }
+        candidates.push({inp: inp, val: val, rect: rect});
+      }
+
+      if (candidates.length === 0) return 'tpsl_input_not_found:0_inputs_on_chart';
+
+      // Pick the most recently appeared / most relevant input
+      // Prefer inputs with price-like values, or empty inputs ready for input
+      var best = null;
+      for (var j = 0; j < candidates.length; j++) {
+        var c = candidates[j];
+        if (/^[0-9]{2,}/.test(c.val.replace(/[,.]/g, ''))) {
+          best = c.inp;
+          break;
         }
       }
-      // Also check inputs in any floating panel/popup near the chart
-      if (!best) {
-        for (var i = 0; i < inputs.length; i++) {
-          var inp = inputs[i];
-          if (!inp.offsetParent) continue;
-          var rect = inp.getBoundingClientRect();
-          // Any recently-appeared input in the middle of the screen
-          if (rect.top > 50 && rect.top < window.innerHeight * 0.8 &&
-              rect.left < window.innerWidth * 0.7) {
-            best = inp;
-            break;
-          }
-        }
-      }
-      if (!best) return 'tpsl_input_not_found';
+      // Fallback: any input on chart area
+      if (!best) best = candidates[0].inp;
+
+      // Focus and select all existing text
+      best.focus();
+      best.select();
+
+      // Use React-compatible value setting
+      var tracker = best._valueTracker;
+      if (tracker) tracker.setValue('');
       var nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       nativeSet.call(best, String(price));
       best.dispatchEvent(new Event('input', {bubbles: true}));
       best.dispatchEvent(new Event('change', {bubbles: true}));
-      // Press Enter to confirm
-      best.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
-      best.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
-      return 'tpsl_price_set_' + price;
+
+      // Press Enter to confirm the price
+      best.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
+      best.dispatchEvent(new KeyboardEvent('keypress', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
+      best.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
+
+      return 'tpsl_price_set_' + price + '_was_' + (best.value);
     },
 
     // Legacy: Place a Stop order via order panel tabs (fallback)

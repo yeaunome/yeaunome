@@ -264,6 +264,10 @@ class ReplayEngine:
             time.sleep(1)
 
         qty = self.config.contracts
+        if qty < 2:
+            qty = 10  # override stale config
+            self.config.contracts = qty
+        self._log_signal("SYSTEM", 0, f"  Config contracts={qty}")
         qty_result = self.bridge._run_cli(
             "ui", "eval", f"window._floop.setQuantity({qty})", timeout=8)
         qty_status = qty_result.data.get("result", "?") if qty_result.success else "failed"
