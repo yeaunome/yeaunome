@@ -21,7 +21,7 @@ from urllib.parse import urlparse, parse_qs
 
 from .config import TradingConfig
 from .mcp_bridge import TVBridge
-from .signal_parser import SignalAggregator, FloopSignal, SignalSide, parse_tables
+from .signal_parser import SignalAggregator, FloopSignal, SignalSide, parse_tables, parse_study_values
 from .paper_trader import PaperTrader, Trade
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -80,6 +80,11 @@ class ReplayEngine:
             "last_price": self.last_price,
             "position": self.position_side,
             "position_entry": self.position_entry,
+            "stop_price": round(self.paper.position.stop_price, 2),
+            "trail_price": round(self.paper.position.trail_price, 2),
+            "atr_at_entry": round(self.paper.position.atr_at_entry, 4),
+            "bars_held": self.paper.position.bars_held,
+            "high_water": round(self.paper.position.high_water, 2),
             "tv_position": self.tv_position,
             "tv_pnl": self.tv_pnl,
             "unrealized_pnl": round(self.paper.unrealized_pnl, 2),
@@ -138,7 +143,10 @@ class ReplayEngine:
     def stop_replay(self):
         """Stop replay mode."""
         if not self.paper.is_flat:
-            self._execute_close("manual")
+            self._execute_close("manual", closing_side=self.position_side)
+            trade = self.paper.flatten(self.last_price, self.last_bar_time)
+            if trade:
+                self._log_trade(trade)
         self.bridge.replay_stop()
         self.replay_active = False
         self._log_signal("SYSTEM", 0, "Replay stopped")
@@ -154,7 +162,10 @@ class ReplayEngine:
     def flatten(self):
         """Force close any open position."""
         if not self.paper.is_flat:
-            self._execute_close("manual_flatten")
+            self._execute_close("manual_flatten", closing_side=self.position_side)
+            trade = self.paper.flatten(self.last_price, self.last_bar_time)
+            if trade:
+                self._log_trade(trade)
 
     def start_loop(self):
         """Start the main polling loop in a background thread."""
@@ -292,9 +303,11 @@ class ReplayEngine:
             return
 
         # Process bar through paper trader (check stops)
+        # Save position side BEFORE on_bar() closes it internally
+        pre_bar_side = self.position_side
         stopped = self.paper.on_bar(high, low, self.last_price, bar_time)
         if stopped:
-            self._execute_close(stopped.exit_reason)
+            self._execute_close(stopped.exit_reason, closing_side=pre_bar_side)
             self._log_trade(stopped)
 
         # Read replay status for TV position/PnL
@@ -327,15 +340,30 @@ class ReplayEngine:
             if signal and signal.is_valid:
                 self.last_signal = signal
 
-                # Enrich with table data
+                # Enrich with table data and study values
                 tables = self.bridge.get_pine_tables(study_filter=self.config.floop_indicator_name)
                 if tables.success:
                     self.table_data = parse_tables(tables.data, self.config.floop_indicator_name)
                     if signal.signal_strength == 0 and "signal_strength_value" in self.table_data:
                         signal.signal_strength = self.table_data["signal_strength_value"]
 
+                # Get ATR from study values if not in signal text
+                if signal.atr <= 0:
+                    values = self.bridge.get_study_values()
+                    if values.success:
+                        study_vals = parse_study_values(values.data, self.config.floop_indicator_name)
+                        # Look for ATR plot value
+                        for key in ("ATR", "atr", "ATR Value", "atr_value"):
+                            if key in study_vals and study_vals[key] > 0:
+                                signal.atr = float(study_vals[key])
+                                break
+                    # Fallback: derive ATR from table "ATR 0.04%" and current price
+                    if signal.atr <= 0 and "atr_pct" in self.table_data and self.last_price > 0:
+                        signal.atr = self.last_price * (self.table_data["atr_pct"] / 100.0)
+
                 self._log_signal(signal.side.value, signal.price,
-                                 f"Str: {signal.signal_strength}")
+                                 f"Str: {signal.signal_strength} ATR: {signal.atr:.2f}" if signal.atr > 0
+                                 else f"Str: {signal.signal_strength} (no ATR)")
 
                 # Execute if armed
                 if self.armed:
@@ -358,7 +386,7 @@ class ReplayEngine:
         # ── EXIT signals bypass all entry gates ──
         if signal.is_exit:
             if not self.paper.is_flat:
-                self._execute_close("signal_exit")
+                self._execute_close("signal_exit", closing_side=self.position_side)
                 trade = self.paper.on_signal(signal, current_price=price, bar_time=bar_time)
                 if trade:
                     self._log_trade(trade)
@@ -393,7 +421,7 @@ class ReplayEngine:
         # ── Reversal: close opposite, then open new ──
         if signal.side == SignalSide.LONG:
             if self.paper.is_short:
-                self._execute_close("signal_reverse")
+                self._execute_close("signal_reverse", closing_side="SHORT")
                 trade = self.paper.on_signal(
                     FloopSignal(side=SignalSide.EXIT), current_price=price, bar_time=bar_time)
                 if trade:
@@ -403,7 +431,7 @@ class ReplayEngine:
 
         elif signal.side == SignalSide.SHORT:
             if self.paper.is_long:
-                self._execute_close("signal_reverse")
+                self._execute_close("signal_reverse", closing_side="LONG")
                 trade = self.paper.on_signal(
                     FloopSignal(side=SignalSide.EXIT), current_price=price, bar_time=bar_time)
                 if trade:
@@ -436,7 +464,11 @@ class ReplayEngine:
             self.paper.on_signal(signal, current_price=price, bar_time=bar_time)
             self.position_side = "LONG"
             self.position_entry = price
-            self._log_signal("BUY", price, f"Long opened @ {price:.2f}")
+            stop = self.paper.position.stop_price
+            atr = self.paper.position.atr_at_entry
+            self._log_signal("BUY", price,
+                             f"Long @ {price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
+                             else f"Long @ {price:.2f} | NO ATR — no stop set!")
         else:
             self.errors.append(f"Buy failed: {result.error}")
         if was_autoplaying:
@@ -453,25 +485,45 @@ class ReplayEngine:
             self.paper.on_signal(signal, current_price=price, bar_time=bar_time)
             self.position_side = "SHORT"
             self.position_entry = price
-            self._log_signal("SELL", price, f"Short opened @ {price:.2f}")
+            stop = self.paper.position.stop_price
+            atr = self.paper.position.atr_at_entry
+            self._log_signal("SELL", price,
+                             f"Short @ {price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
+                             else f"Short @ {price:.2f} | NO ATR — no stop set!")
         else:
             self.errors.append(f"Sell failed: {result.error}")
         if was_autoplaying:
             time.sleep(0.2)
             self._resume_autoplay()
 
-    def _execute_close(self, reason: str):
-        """Close position in TradingView replay."""
+    def _execute_close(self, reason: str, closing_side: str = ""):
+        """Close position in TradingView replay by placing the opposite trade."""
+        side = closing_side or self.position_side
+        if side == "FLAT":
+            return  # nothing to close
+
         was_autoplaying = self._pause_autoplay()
-        result = self.bridge.replay_trade("close")
+
+        # In TradingView replay, close = opposite trade (sell to close long, buy to close short)
+        if side == "LONG":
+            result = self.bridge.replay_trade("sell")
+            action = "sell-to-close"
+        elif side == "SHORT":
+            result = self.bridge.replay_trade("buy")
+            action = "buy-to-close"
+        else:
+            result = self.bridge.replay_trade("close")
+            action = "close"
+
         self._log_signal("DEBUG", self.last_price,
-                         f"replay_trade(close) → success={result.success} data={result.data} err={result.error}")
+                         f"replay_trade({action}) → success={result.success} data={result.data} err={result.error}")
         if result.success:
             self.position_side = "FLAT"
             self.position_entry = 0.0
-            self._log_signal("CLOSE", self.last_price, f"Position closed: {reason}")
+            self._log_signal("CLOSE", self.last_price,
+                             f"{side} closed @ {self.last_price:.2f}: {reason}")
         else:
-            self.errors.append(f"Close failed: {result.error}")
+            self.errors.append(f"Close failed ({action}): {result.error}")
         if was_autoplaying:
             time.sleep(0.2)
             self._resume_autoplay()

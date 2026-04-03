@@ -349,11 +349,16 @@ function updateDashboard(s) {
   // Position card
   const pt = document.getElementById('position-text');
   if (s.position === 'FLAT') {
-    pt.textContent = '— FLAT — No open position';
+    pt.innerHTML = '— FLAT — No open position';
     pt.className = 'pos-text';
   } else {
     const upnl = fmt$(s.unrealized_pnl);
-    pt.textContent = s.position + ' @ ' + s.position_entry.toFixed(2) + ' | Unrealized: ' + upnl;
+    let stopInfo = '';
+    if (s.stop_price > 0) stopInfo += ' | Stop: ' + s.stop_price.toFixed(2);
+    if (s.trail_price > 0) stopInfo += ' | Trail: ' + s.trail_price.toFixed(2);
+    if (s.atr_at_entry > 0) stopInfo += ' | ATR: ' + s.atr_at_entry.toFixed(2);
+    if (s.bars_held > 0) stopInfo += ' | Bars: ' + s.bars_held;
+    pt.innerHTML = s.position + ' @ ' + s.position_entry.toFixed(2) + ' | Unrealized: ' + upnl + '<br><span style="font-size:13px;color:#64748b">' + (stopInfo || ' | No stop set') + '</span>';
     pt.className = 'pos-text ' + s.position.toLowerCase();
   }
 
