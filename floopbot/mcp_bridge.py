@@ -14,6 +14,7 @@ import urllib.request
 import urllib.error
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -191,168 +192,49 @@ class TVBridge:
         else:
             return MCPResult(success=False, data={}, error=f"Unknown action: {action}")
 
-    def _ensure_trade_panel_open(self):
-        """Click the 'Trade' tab at the BOTTOM of TradingView to open the order panel.
+    def _ensure_trade_helper_loaded(self):
+        """Load the trade helper JS into TradingView if not already loaded."""
+        check = self._run_cli("ui", "eval", "typeof window._floop", timeout=5)
+        if check.success and check.data.get("result") == "object":
+            return True
+        # Load the helper
+        helper_path = Path(__file__).parent / "trade_helper.js"
+        if not helper_path.exists():
+            return False
+        js_code = helper_path.read_text(encoding="utf-8")
+        result = self._run_cli("ui", "eval", js_code, timeout=10)
+        return result.success
 
-        Must be careful NOT to click the top-right 'Trade' button which
-        opens broker connection and can trigger 'Leave replay?' dialog.
-        """
-        js_open_trade = (
-            '(function() {'
-            '  // First check if order panel is already visible'
-            '  var orderPanel = document.querySelector("[class*=orderWidget], [class*=orderTicket], [class*=orderPanel]");'
-            '  if (orderPanel && orderPanel.offsetParent) return "already_open";'
-            '  // Find the Trade tab in the BOTTOM widget bar only'
-            '  var bottomBar = document.querySelector("[class*=bottom-widgetbar], [class*=layout__area--bottom]");'
-            '  if (bottomBar) {'
-            '    var tabs = bottomBar.querySelectorAll("button, [class*=tab], [role=tab]");'
-            '    for (var i = 0; i < tabs.length; i++) {'
-            '      var text = (tabs[i].textContent || "").trim();'
-            '      if (/^Trade$/i.test(text) && tabs[i].offsetParent !== null) {'
-            '        tabs[i].click();'
-            '        return "trade_tab_clicked";'
-            '      }'
-            '    }'
-            '  }'
-            '  return "trade_tab_not_found";'
-            '})()'
-        )
-        result = self._run_cli("ui", "eval", js_open_trade, timeout=10)
-        if result.success and result.data.get("result") != "already_open":
+    def _ensure_trade_panel_open(self):
+        """Click the 'Trade' tab at the BOTTOM of TradingView."""
+        self._ensure_trade_helper_loaded()
+        result = self._run_cli("ui", "eval", "window._floop.openTradePanel()", timeout=10)
+        if result.success and result.data.get("result") not in ("already_open",):
             time.sleep(0.5)
         return result
 
     def dismiss_dialogs(self):
         """Dismiss any popup dialogs like 'Leave current replay?'"""
-        js_dismiss = (
-            '(function() {'
-            '  var btns = document.querySelectorAll("button");'
-            '  for (var i = 0; i < btns.length; i++) {'
-            '    var text = (btns[i].textContent || "").trim();'
-            '    if (/^Stay$/i.test(text) && btns[i].offsetParent !== null) {'
-            '      btns[i].click();'
-            '      return "dismissed_stay";'
-            '    }'
-            '  }'
-            '  return "no_dialog";'
-            '})()'
-        )
-        return self._run_cli("ui", "eval", js_dismiss, timeout=5)
+        self._ensure_trade_helper_loaded()
+        return self._run_cli("ui", "eval", "window._floop.dismissDialog()", timeout=5)
 
     def _place_order_via_ui(self, side: str) -> MCPResult:
         """Select side, switch to Market, click Place Order."""
-        # Step 0: Ensure the Trade panel is open
-        self._ensure_trade_panel_open()
-
-        # Step 1: Click the Buy or Sell side selector
-        side_lower = side.lower()
-        js_select_side = (
-            '(function() {'
-            '  // Search within order/trading panels for Buy/Sell text'
-            '  var containers = document.querySelectorAll("[class*=order], [class*=trading], [class*=ticket]");'
-            '  for (var c = 0; c < containers.length; c++) {'
-            '    var els = containers[c].querySelectorAll("*");'
-            '    for (var i = 0; i < els.length; i++) {'
-            '      var e = els[i];'
-            '      if (!e.offsetParent) continue;'
-            '      var text = (e.textContent || "").trim();'
-            '      // Match exact "Buy" or "Sell", or "Buy" followed by price like "Buy15,160.25"'
-            f'      if (/^{side}$/i.test(text) || /^{side}[0-9,.\\s]/i.test(text)) {{'
-            '        // Prefer leaf nodes or nodes with minimal children'
-            '        if (e.children.length <= 2) {'
-            '          e.click();'
-            f'          return "selected_{side_lower}: " + e.tagName + " " + text.substring(0,20);'
-            '        }'
-            '      }'
-            '    }'
-            '  }'
-            '  // Fallback: search everywhere'
-            '  var all = document.querySelectorAll("span, div, button, a");'
-            '  for (var i = 0; i < all.length; i++) {'
-            '    var e = all[i];'
-            '    if (!e.offsetParent) continue;'
-            '    var ownText = "";'
-            '    for (var j = 0; j < e.childNodes.length; j++) {'
-            '      if (e.childNodes[j].nodeType === 3) ownText += e.childNodes[j].textContent;'
-            '    }'
-            '    ownText = ownText.trim();'
-            f'    if (/^{side}$/i.test(ownText)) {{'
-            '      e.click();'
-            f'      return "selected_{side_lower}_fallback: " + e.tagName;'
-            '    }'
-            '  }'
-            f'  return "no_{side_lower}_element";'
-            '})()'
-        )
-        result1 = self._run_cli("ui", "eval", js_select_side, timeout=10)
-        if not result1.success:
-            return result1
-        side_result = result1.data.get("result", "")
-        if "no_" in str(side_result):
-            return MCPResult(success=False, data={}, error=f"Could not find {side} selector in order panel")
-
-        # Step 2: Click Market order type tab
-        js_market = (
-            '(function() {'
-            '  var tabs = document.querySelectorAll("button, [class*=tab]");'
-            '  for (var i = 0; i < tabs.length; i++) {'
-            '    if (/^Market$/i.test(tabs[i].textContent.trim()) && tabs[i].offsetParent !== null) {'
-            '      tabs[i].click();'
-            '      return "market_selected";'
-            '    }'
-            '  }'
-            '  return "market_not_found";'
-            '})()'
-        )
-        result2 = self._run_cli("ui", "eval", js_market, timeout=10)
-
-        # Step 3: Click Place Order button
-        time.sleep(0.3)
-        js_place = (
-            '(function() {'
-            '  var btn = document.querySelector("[data-name=place-and-modify-button]");'
-            '  if (btn && btn.offsetParent !== null) {'
-            '    btn.click();'
-            '    return "order_placed";'
-            '  }'
-            '  return "place_button_not_found";'
-            '})()'
-        )
-        result3 = self._run_cli("ui", "eval", js_place, timeout=10)
-        if not result3.success:
-            return result3
-        place_result = result3.data.get("result", "")
-        if place_result == "place_button_not_found":
-            return MCPResult(success=False, data={}, error="Place order button not found")
-
-        return MCPResult(success=True, data={"action": side.lower(), "result": "order_placed"})
+        self._ensure_trade_helper_loaded()
+        action = "buy" if side == "Buy" else "sell"
+        result = self._run_cli("ui", "eval", f"window._floop.{action}()", timeout=15)
+        if not result.success:
+            return result
+        res_text = str(result.data.get("result", ""))
+        if res_text.startswith("fail:"):
+            return MCPResult(success=False, data=result.data, error=res_text)
+        return MCPResult(success=True, data={"action": side.lower(), "result": res_text})
 
     def _close_position_via_ui(self) -> MCPResult:
-        """Close position by clicking the close/flatten button, or reversing."""
-        self._ensure_trade_panel_open()
-        # Try to find a close/flatten button
-        js_close = (
-            '(function() {'
-            '  var btns = document.querySelectorAll("button, [class*=close], [class*=flatten]");'
-            '  for (var i = 0; i < btns.length; i++) {'
-            '    var text = (btns[i].textContent || "").trim();'
-            '    if (/^close|^flatten|close position/i.test(text) && btns[i].offsetParent !== null) {'
-            '      btns[i].click();'
-            '      return "closed: " + text.substring(0, 30);'
-            '    }'
-            '  }'
-            '  return "no_close_button";'
-            '})()'
-        )
-        result = self._run_cli("ui", "eval", js_close, timeout=10)
-        if result.success and result.data.get("result", "").startswith("closed"):
-            return MCPResult(success=True, data={"action": "close", "result": result.data["result"]})
-
-        # Fallback: try the API close
-        result2 = self._run_cli("ui", "eval",
-            'window.TradingViewApi._replayApi.closePosition(); "api_close_called"',
-            timeout=10)
-        return MCPResult(success=True, data={"action": "close", "result": "api_fallback"})
+        """Close position via DOM."""
+        self._ensure_trade_helper_loaded()
+        result = self._run_cli("ui", "eval", "window._floop.close()", timeout=10)
+        return MCPResult(success=True, data={"action": "close", "result": result.data.get("result", "")})
 
 
     # ── Screenshots ──
