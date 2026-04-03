@@ -309,6 +309,9 @@ class ReplayEngine:
         if stopped:
             self._execute_close(stopped.exit_reason, closing_side=pre_bar_side)
             self._log_trade(stopped)
+        elif not self.paper.is_flat and self.bar_count % 5 == 0:
+            # Redraw stop lines periodically to track trailing stop movement
+            self._draw_stop_lines()
 
         # Read replay status for TV position/PnL
         rep_status = self.bridge.replay_status()
@@ -360,6 +363,10 @@ class ReplayEngine:
                     # Fallback: derive ATR from table "ATR 0.04%" and current price
                     if signal.atr <= 0 and "atr_pct" in self.table_data and self.last_price > 0:
                         signal.atr = self.last_price * (self.table_data["atr_pct"] / 100.0)
+
+                # Last resort: calculate ATR from OHLCV bars
+                if signal.atr <= 0:
+                    signal.atr = self._calc_atr_from_ohlcv()
 
                 self._log_signal(signal.side.value, signal.price,
                                  f"Str: {signal.signal_strength} ATR: {signal.atr:.2f}" if signal.atr > 0
@@ -469,6 +476,7 @@ class ReplayEngine:
             self._log_signal("BUY", price,
                              f"Long @ {price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
                              else f"Long @ {price:.2f} | NO ATR — no stop set!")
+            self._draw_stop_lines()
         else:
             self.errors.append(f"Buy failed: {result.error}")
         if was_autoplaying:
@@ -490,6 +498,7 @@ class ReplayEngine:
             self._log_signal("SELL", price,
                              f"Short @ {price:.2f} | ATR={atr:.2f} Stop={stop:.2f}" if stop > 0
                              else f"Short @ {price:.2f} | NO ATR — no stop set!")
+            self._draw_stop_lines()
         else:
             self.errors.append(f"Sell failed: {result.error}")
         if was_autoplaying:
@@ -522,11 +531,119 @@ class ReplayEngine:
             self.position_entry = 0.0
             self._log_signal("CLOSE", self.last_price,
                              f"{side} closed @ {self.last_price:.2f}: {reason}")
+            self._clear_stop_lines()
         else:
             self.errors.append(f"Close failed ({action}): {result.error}")
         if was_autoplaying:
             time.sleep(0.2)
             self._resume_autoplay()
+
+    def _calc_atr_from_ohlcv(self, period: int = 14) -> float:
+        """Calculate ATR from recent OHLCV bars as fallback when indicator ATR unavailable."""
+        try:
+            ohlcv = self.bridge.get_ohlcv(count=period + 5)
+            if not ohlcv.success:
+                return 0.0
+            bars = ohlcv.data.get("bars", ohlcv.data.get("data", []))
+            if not bars or len(bars) < 2:
+                return 0.0
+
+            true_ranges = []
+            for i in range(1, len(bars)):
+                h = bars[i].get("high", 0)
+                l = bars[i].get("low", 0)
+                prev_c = bars[i - 1].get("close", 0)
+                if h == 0 or l == 0 or prev_c == 0:
+                    continue
+                tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+                true_ranges.append(tr)
+
+            if not true_ranges:
+                return 0.0
+            return sum(true_ranges[-period:]) / min(len(true_ranges), period)
+        except Exception:
+            return 0.0
+
+    def _draw_stop_lines(self):
+        """Draw stop/trail horizontal lines on TradingView chart via CDP."""
+        if self.paper.is_flat:
+            self._clear_stop_lines()
+            return
+
+        stop = self.paper.position.stop_price
+        trail = self.paper.position.trail_price
+        entry = self.paper.position.entry_price
+
+        js = """
+        (function() {
+            // Remove old floop lines
+            var old = document.querySelectorAll('[data-floop-line]');
+            old.forEach(function(el) { el.remove(); });
+
+            var chart = document.querySelector('.chart-markup-table');
+            if (!chart) return 'no_chart';
+
+            var pane = chart.closest('[class*=pane]') || chart.parentElement;
+            var rect = chart.getBoundingClientRect();
+
+            function priceToY(price) {
+                // Use TradingView's price scale to convert price to Y coordinate
+                var scale = document.querySelector('[class*=price-axis] [class*=pane]') ||
+                            document.querySelector('[class*=priceAxis]');
+                if (!scale) return -1;
+                var labels = scale.querySelectorAll('[class*=label]');
+                var prices = [];
+                labels.forEach(function(l) {
+                    var val = parseFloat(l.textContent.replace(/,/g, ''));
+                    if (!isNaN(val)) {
+                        var r = l.getBoundingClientRect();
+                        prices.push({price: val, y: r.top + r.height/2});
+                    }
+                });
+                if (prices.length < 2) return -1;
+                prices.sort(function(a,b) { return a.price - b.price; });
+                var p1 = prices[0], p2 = prices[prices.length-1];
+                var pixPerPoint = (p1.y - p2.y) / (p2.price - p1.price);
+                return p2.y + (p2.price - price) * pixPerPoint;
+            }
+
+            function drawLine(price, color, label) {
+                if (price <= 0) return;
+                var y = priceToY(price);
+                if (y < 0) return;
+                y = y - rect.top;
+                var line = document.createElement('div');
+                line.setAttribute('data-floop-line', label);
+                line.style.cssText = 'position:absolute;left:0;right:60px;height:1px;' +
+                    'background:' + color + ';top:' + y + 'px;z-index:5;pointer-events:none;' +
+                    'border-top:1px dashed ' + color + ';opacity:0.8;';
+                var tag = document.createElement('div');
+                tag.style.cssText = 'position:absolute;right:0;top:-8px;background:' + color +
+                    ';color:#fff;font-size:10px;padding:1px 4px;border-radius:2px;font-weight:bold;';
+                tag.textContent = label + ' ' + price.toFixed(2);
+                line.appendChild(tag);
+                chart.appendChild(line);
+            }
+
+            drawLine(ENTRY_PRICE, '#3b82f6', 'ENTRY');
+            drawLine(STOP_PRICE, '#ef4444', 'SL');
+            drawLine(TRAIL_PRICE, '#eab308', 'TRAIL');
+            return 'lines_drawn';
+        })()
+        """.replace("ENTRY_PRICE", str(entry)).replace("STOP_PRICE", str(stop)).replace("TRAIL_PRICE", str(trail))
+
+        self.bridge._run_cli("ui", "eval", js, timeout=5)
+
+    def _clear_stop_lines(self):
+        """Remove stop/trail lines from TradingView chart."""
+        js = """
+        (function() {
+            var old = document.querySelectorAll('[data-floop-line]');
+            old.forEach(function(el) { el.remove(); });
+            return 'cleared';
+        })()
+        """
+        self.bridge._run_cli("ui", "eval", js, timeout=5)
 
     def _log_signal(self, side: str, price: float, msg: str):
         ts = datetime.now().strftime("%H:%M:%S")
