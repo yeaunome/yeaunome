@@ -193,109 +193,24 @@ class ReplayEngine:
 
     def run_backtest(self, speed: int = 0):
         """
-        One-click backtest setup. ALWAYS runs full TradingView sequence:
+        Start backtest monitoring. User handles replay setup manually:
         1. Replay Mode
         2. 1m timeframe (top left)
-        3. Random Bar
-        4. 5m timeframe (top left, for FLOOP Pro signals)
+        3. Select starting date / Random bar
+        4. 5m timeframe (top left)
         5. Update replay step interval to 1m
-        6. Trade button → set contracts
-        7. Start autoplay + monitoring
+
+        Bot takes over from here:
+        - Opens trade panel, sets contracts to 10
+        - Starts autoplay + monitoring loop
         """
         self.armed = True
         self.bridge._ensure_trade_helper_loaded(force=True)
         self.bridge.dismiss_dialogs()
-        step_iv = self.config.replay_step_interval
-
-        # Stop any existing replay first
-        status = self.bridge.replay_status()
-        if status.success and status.data.get("is_replay_started"):
-            self._log_signal("SYSTEM", 0, "Stopping existing replay...")
-            self.bridge.replay_stop()
-            time.sleep(1)
-            self.bridge.dismiss_dialogs()
-            time.sleep(0.5)
-
-        # ── Step 1: Enter Replay Mode ──
-        self._log_signal("SYSTEM", 0, "1/6 Entering replay mode...")
-        # Click the Replay button at the top
-        replay_js = """
-        (function() {
-            var btns = document.querySelectorAll('button, [data-name]');
-            for (var i = 0; i < btns.length; i++) {
-                var dn = btns[i].getAttribute('data-name') || '';
-                if (/replay/i.test(dn) && btns[i].offsetParent) {
-                    btns[i].click();
-                    return 'replay_btn_clicked:' + dn;
-                }
-            }
-            // Fallback: find button with "Replay" text
-            for (var i = 0; i < btns.length; i++) {
-                if (!btns[i].offsetParent) continue;
-                var text = (btns[i].textContent || '').trim();
-                if (/^Replay$/i.test(text)) {
-                    btns[i].click();
-                    return 'replay_text_clicked';
-                }
-            }
-            return 'replay_not_found';
-        })()
-        """
-        r = self.bridge._run_cli("ui", "eval", replay_js, timeout=8)
-        self._log_signal("SYSTEM", 0, f"  {r.data.get('result', r.error) if r.success else r.error}")
-        time.sleep(1.5)
-
-        # ── Step 2: Switch to 1m timeframe (top left) ──
-        self._log_signal("SYSTEM", 0, "2/6 Setting 1m timeframe...")
-        self.bridge.set_timeframe("1")
-        time.sleep(1.5)
-
-        # ── Step 3: Start replay at a random date ──
-        # DOM-based "Random bar" button is unreliable. Instead, generate a
-        # random date in the last ~2 years and use the replay start API.
-        self._log_signal("SYSTEM", 0, "3/6 Starting replay at random date...")
-        from datetime import datetime, timedelta
-        today = datetime.now()
-        # Random date between 2 years ago and 30 days ago
-        days_back = random.randint(30, 730)
-        random_date = (today - timedelta(days=days_back)).strftime("%Y-%m-%d")
-        self._log_signal("SYSTEM", 0, f"  Random date: {random_date}")
-        start_result = self.bridge.replay_start(date=random_date)
-        start_status = start_result.data if start_result.success else start_result.error
-        self._log_signal("SYSTEM", 0, f"  Replay start: {start_status}")
-
         self.replay_active = True
-        time.sleep(3)  # Wait for chart to load
 
-        # ── Step 4: Switch to 5m timeframe (for FLOOP Pro signals) ──
-        self._log_signal("SYSTEM", 0, f"4/6 Setting {self.config.timeframe}m timeframe for FLOOP Pro...")
-        self.bridge.dismiss_dialogs()
-        time.sleep(0.3)
-        tf_result = self.bridge.set_timeframe(self.config.timeframe)
-        tf_status = tf_result.data if tf_result.success else tf_result.error
-        self._log_signal("SYSTEM", 0, f"  Timeframe → {self.config.timeframe}m: {tf_status}")
-        time.sleep(2)
-        # Retry once if it didn't take (dialog might have intercepted)
-        self.bridge.dismiss_dialogs()
-        time.sleep(0.3)
-
-        # ── Step 5: Update replay step interval to 1m ──
-        self._log_signal("SYSTEM", 0, f"5/6 Setting replay step to {step_iv}...")
-        # Click the step interval button to open dropdown
-        open_result = self.bridge._run_cli(
-            "ui", "eval", "window._floop.openStepMenu()", timeout=8)
-        open_status = open_result.data.get("result", "?") if open_result.success else "failed"
-        self._log_signal("SYSTEM", 0, f"  Step menu: {open_status}")
-        time.sleep(0.5)
-        # Select the target interval
-        sel_result = self.bridge._run_cli(
-            "ui", "eval", f"window._floop.selectStepInterval('{step_iv}')", timeout=8)
-        sel_status = sel_result.data.get("result", "?") if sel_result.success else "failed"
-        self._log_signal("SYSTEM", 0, f"  Step → {step_iv}: {sel_status}")
-        time.sleep(0.5)
-
-        # ── Step 6: Open Trade panel + set contracts ──
-        self._log_signal("SYSTEM", 0, "6/6 Opening trade panel, setting contracts...")
+        # ── Open Trade panel + set contracts ──
+        self._log_signal("SYSTEM", 0, "Opening trade panel, setting contracts...")
         trade_result = self.bridge._ensure_trade_panel_open()
         trade_status = trade_result.data.get("result", "?") if trade_result.success else "failed"
         self._log_signal("SYSTEM", 0, f"  Trade panel: {trade_status}")
@@ -304,9 +219,9 @@ class ReplayEngine:
 
         qty = self.config.contracts
         if qty < 2:
-            qty = 10  # override stale config
+            qty = 10
             self.config.contracts = qty
-        self._log_signal("SYSTEM", 0, f"  Config contracts={qty}")
+        self._log_signal("SYSTEM", 0, f"  Setting contracts to {qty}...")
         qty_result = self.bridge._run_cli(
             "ui", "eval", f"window._floop.setQuantity({qty})", timeout=8)
         qty_status = qty_result.data.get("result", "?") if qty_result.success else "failed"
