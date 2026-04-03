@@ -185,9 +185,10 @@ class ReplayEngine:
 
         # Check if we're already in replay mode
         status = self.bridge.replay_status()
-        if status.success:
+        already_in_replay = (status.success and status.data.get("is_replay_started"))
+        if already_in_replay:
             self.replay_active = True
-            self._log_signal("SYSTEM", 0, "Replay mode detected")
+            self._log_signal("SYSTEM", 0, "Replay mode detected — already running")
         else:
             self._log_signal("SYSTEM", 0, "Starting replay mode...")
             if not self.start_replay():
