@@ -28,7 +28,7 @@ Start-Sleep 3
 
 # Step 3: Launch TradingView
 Write-Host "Launching TradingView with debug port 9222..." -ForegroundColor Yellow
-C:\Windows\System32\cmd.exe /c "start shell:AppsFolder\TradingView.Desktop_n534cwy3pjxzj!TradingView.Desktop"
+C:\Windows\System32\cmd.exe /c "start shell:AppsFolder\TradingView.Desktop_n534cwy3pjxzj!TradingView.Desktop --remote-debugging-port=9222"
 
 # Step 4: Wait for CDP to be ready
 Write-Host "Waiting for CDP connection..." -ForegroundColor Yellow
