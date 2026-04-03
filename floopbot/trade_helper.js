@@ -13,7 +13,7 @@
     openTradePanel: function() {
       // Check if order panel with Sell/Buy is already visible
       var panel = document.querySelector('[class*=orderWidget], [class*=orderTicket], [class*=orderPanel]');
-      if (panel && panel.offsetParent) {
+      if (panel && panel.offsetParent && panel.offsetWidth > 50) {
         var text = panel.textContent || '';
         if (/Sell.*Buy|Buy.*Sell/i.test(text)) return 'already_open';
       }
