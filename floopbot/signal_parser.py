@@ -56,20 +56,23 @@ class FloopSignal:
 #  "comment":"FLOOP LONG"}
 
 LONG_PATTERNS = [
+    re.compile(r"^LONG$", re.IGNORECASE),
     re.compile(r"FLOOP\s*LONG", re.IGNORECASE),
     re.compile(r"(?:BUY|LONG)\s*SIGNAL", re.IGNORECASE),
     re.compile(r"(?:▲|↑)\s*(?:LONG|BUY)", re.IGNORECASE),
 ]
 
 SHORT_PATTERNS = [
+    re.compile(r"^SHORT$", re.IGNORECASE),
     re.compile(r"FLOOP\s*SHORT", re.IGNORECASE),
     re.compile(r"(?:SELL|SHORT)\s*SIGNAL", re.IGNORECASE),
     re.compile(r"(?:▼|↓)\s*(?:SHORT|SELL)", re.IGNORECASE),
 ]
 
 EXIT_PATTERNS = [
+    re.compile(r"^EXIT$", re.IGNORECASE),
     re.compile(r"FLOOP\s*EXIT", re.IGNORECASE),
-    re.compile(r"(?:EXIT|CLOSE|FLATTEN)", re.IGNORECASE),
+    re.compile(r"(?:CLOSE|FLATTEN)", re.IGNORECASE),
     re.compile(r"(?:✕|×)\s*(?:EXIT|CLOSE)", re.IGNORECASE),
 ]
 
@@ -147,8 +150,13 @@ def parse_tables(table_data: dict, indicator_name: str = "FLOOP") -> dict:
     """
     Parse FLOOP Pro table data for session stats and config values.
 
+    Actual FLOOP Pro table format:
+      "  QUALITY | LOW  6/14  "
+      "  Vol LOW (2%ile) | ATR 0.04%  "
+      "  BEARISH | HTF BULL"
+
     Returns dict with keys like:
-    - signal_strength, atr, bias, session_stats, etc.
+    - signal_strength_value, atr_pct, bias, quality, etc.
     """
     result = {}
     studies = table_data.get("studies", [])
@@ -161,26 +169,32 @@ def parse_tables(table_data: dict, indicator_name: str = "FLOOP") -> dict:
         for table in study.get("tables", []):
             rows = table.get("rows", [])
             for row_text in rows:
-                # Parse "Key | Value" format
-                if " | " in row_text:
-                    parts = row_text.split(" | ")
+                stripped = row_text.strip()
+
+                # Extract signal strength from "QUALITY | LOW  6/14"
+                quality_match = re.search(r"QUALITY\s*\|\s*\w+\s+(\d+)\s*/\s*(\d+)", stripped, re.IGNORECASE)
+                if quality_match:
+                    result["signal_strength_value"] = int(quality_match.group(1))
+                    result["signal_strength_max"] = int(quality_match.group(2))
+                    result["quality"] = stripped
+
+                # Extract ATR from "ATR 0.04%" or "ATR: 12.5"
+                atr_match = re.search(r"ATR\s+([0-9.]+)%?", stripped)
+                if atr_match:
+                    result["atr_pct"] = float(atr_match.group(1))
+
+                # Extract bias from "BEARISH | HTF BULL"
+                if re.search(r"BEARISH|BULLISH", stripped, re.IGNORECASE):
+                    result["bias"] = "BEARISH" if "BEARISH" in stripped.upper() else "BULLISH"
+                    result["htf_bias"] = "BULL" if "HTF BULL" in stripped.upper() else "BEAR" if "HTF BEAR" in stripped.upper() else ""
+
+                # Parse "Key | Value" format for everything else
+                if " | " in stripped:
+                    parts = stripped.split(" | ")
                     if len(parts) >= 2:
                         key = parts[0].strip().lower().replace(" ", "_")
                         val = parts[1].strip()
                         result[key] = val
-
-                        # Extract numeric values
-                        if "atr" in key:
-                            try:
-                                result["atr_value"] = float(re.sub(r"[^\d.]", "", val))
-                            except ValueError:
-                                pass
-                        if "strength" in key or "signal" in key:
-                            m = re.search(r"(\d+)", val)
-                            if m:
-                                result["signal_strength_value"] = int(m.group(1))
-                        if "bias" in key:
-                            result["bias"] = val.upper()
 
     return result
 

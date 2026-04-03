@@ -168,15 +168,26 @@ class TestSignalParser(unittest.TestCase):
             "studies": [{
                 "name": "FLOOP Pro",
                 "labels": [
-                    {"text": "FLOOP LONG", "price": 24000},
-                    {"text": "FLOOP SHORT", "price": 24050},
+                    {"text": "LONG", "price": 24000},
+                    {"text": "SHORT", "price": 24050},
+                    {"text": "PIVOT  24139.17", "price": 24139.17},
                 ],
             }],
         }
         signals = parse_labels(data, "FLOOP")
-        self.assertEqual(len(signals), 2)
+        self.assertEqual(len(signals), 2)  # PIVOT should be ignored
         self.assertEqual(signals[0].side, SignalSide.LONG)
         self.assertEqual(signals[1].side, SignalSide.SHORT)
+
+    def test_parse_labels_exact_match(self):
+        from floopbot.signal_parser import _classify_label_text
+        self.assertEqual(_classify_label_text("LONG"), SignalSide.LONG)
+        self.assertEqual(_classify_label_text("SHORT"), SignalSide.SHORT)
+        self.assertEqual(_classify_label_text("EXIT"), SignalSide.EXIT)
+        # These should NOT match as signals
+        self.assertEqual(_classify_label_text("PIVOT  24139.17"), SignalSide.NONE)
+        self.assertEqual(_classify_label_text("R1  24398.08"), SignalSide.NONE)
+        self.assertEqual(_classify_label_text("S1  23929.33"), SignalSide.NONE)
 
 
 if __name__ == "__main__":
