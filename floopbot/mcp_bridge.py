@@ -192,17 +192,19 @@ class TVBridge:
         else:
             return MCPResult(success=False, data={}, error=f"Unknown action: {action}")
 
-    def _ensure_trade_helper_loaded(self):
-        """Load the trade helper JS into TradingView if not already loaded."""
-        check = self._run_cli("ui", "eval", "typeof window._floop", timeout=5)
-        if check.success and check.data.get("result") == "object":
+    _helper_loaded = False
+
+    def _ensure_trade_helper_loaded(self, force=False):
+        """Load the trade helper JS into TradingView."""
+        if self._helper_loaded and not force:
             return True
-        # Load the helper
         helper_path = Path(__file__).parent / "trade_helper.js"
         if not helper_path.exists():
             return False
         js_code = helper_path.read_text(encoding="utf-8")
         result = self._run_cli("ui", "eval", js_code, timeout=10)
+        if result.success:
+            self._helper_loaded = True
         return result.success
 
     def _ensure_trade_panel_open(self):
