@@ -191,70 +191,92 @@ class ReplayEngine:
 
     def run_backtest(self, speed: int = 0):
         """
-        One-click backtest: arm, start autoplay, monitor for signals.
-        This is the main workflow the user wants.
+        One-click backtest setup. Follows exact TradingView sequence:
+        1. Replay Mode
+        2. 1m timeframe (so date selector has 1m granularity)
+        3. Select first available date
+        4. 5m timeframe (for FLOOP Pro signals)
+        5. Update replay step interval to 1m
+        6. Trade button → set contracts
+        7. Start autoplay + monitoring
         """
-        # Arm the bot
         self.armed = True
-
-        # Dismiss any lingering dialogs
+        self.bridge._ensure_trade_helper_loaded()
         self.bridge.dismiss_dialogs()
+        step_iv = self.config.replay_step_interval
 
-        # Check if we're already in replay mode
+        # Check if already in replay
         status = self.bridge.replay_status()
         already_in_replay = (status.success and status.data.get("is_replay_started"))
+
         if already_in_replay:
             self.replay_active = True
-            self._log_signal("SYSTEM", 0, "Replay already running")
+            self._log_signal("SYSTEM", 0, "Replay already running — skipping setup")
         else:
-            self._log_signal("SYSTEM", 0, "Starting replay mode...")
+            # ── Step 1: Enter Replay Mode ──
+            self._log_signal("SYSTEM", 0, "1/6 Entering replay mode...")
+            self.bridge._run_cli("ui", "eval",
+                "document.querySelector('[data-name=\"replay\"]') && "
+                "document.querySelector('[data-name=\"replay\"]').click()",
+                timeout=8)
+            time.sleep(1)
+
+            # ── Step 2: Switch to 1m timeframe (top left) ──
+            self._log_signal("SYSTEM", 0, "2/6 Setting 1m timeframe...")
+            self.bridge.set_timeframe("1")
+            time.sleep(1)
+
+            # ── Step 3: Select first available date ──
+            self._log_signal("SYSTEM", 0, "3/6 Selecting first available date...")
             if not self.start_replay():
                 self.bridge.dismiss_dialogs()
                 time.sleep(1)
                 if not self.start_replay():
                     return False
+            time.sleep(1.5)
 
-        # Wait for replay UI to settle, then click "Trade" tab at bottom
-        time.sleep(1)
-        self.bridge._ensure_trade_helper_loaded()
+            # ── Step 4: Switch to 5m timeframe (for FLOOP Pro signals) ──
+            self._log_signal("SYSTEM", 0, "4/6 Setting 5m timeframe for FLOOP Pro...")
+            self.bridge.set_timeframe(self.config.timeframe)
+            time.sleep(1)
+
+        # ── Step 5: Update replay step interval to 1m ──
+        self._log_signal("SYSTEM", 0, f"5/6 Setting replay step to {step_iv}...")
+        # Click the step interval button to open dropdown
+        open_result = self.bridge._run_cli(
+            "ui", "eval", "window._floop.openStepMenu()", timeout=8)
+        open_status = open_result.data.get("result", "?") if open_result.success else "failed"
+        self._log_signal("SYSTEM", 0, f"  Step menu: {open_status}")
+        time.sleep(0.5)
+        # Select the target interval
+        sel_result = self.bridge._run_cli(
+            "ui", "eval", f"window._floop.selectStepInterval('{step_iv}')", timeout=8)
+        sel_status = sel_result.data.get("result", "?") if sel_result.success else "failed"
+        self._log_signal("SYSTEM", 0, f"  Step → {step_iv}: {sel_status}")
+        time.sleep(0.5)
+
+        # ── Step 6: Open Trade panel + set contracts ──
+        self._log_signal("SYSTEM", 0, "6/6 Opening trade panel, setting contracts...")
         trade_result = self.bridge._ensure_trade_panel_open()
         trade_status = trade_result.data.get("result", "?") if trade_result.success else "failed"
-        self._log_signal("SYSTEM", 0, f"Trade panel: {trade_status}")
+        self._log_signal("SYSTEM", 0, f"  Trade panel: {trade_status}")
         if "clicked" in str(trade_status):
-            time.sleep(1)  # Wait for order panel to render
+            time.sleep(1)
 
-        # Set quantity/units to match config
         qty = self.config.contracts
         qty_result = self.bridge._run_cli(
             "ui", "eval", f"window._floop.setQuantity({qty})", timeout=8)
         qty_status = qty_result.data.get("result", "?") if qty_result.success else "failed"
-        self._log_signal("SYSTEM", 0, f"Units → {qty}: {qty_status}")
+        self._log_signal("SYSTEM", 0, f"  Units → {qty}: {qty_status}")
         time.sleep(0.3)
 
-        # Set replay step to 1m for precise stop/TP management
-        # (strategy signals from 5m FLOOP Pro, but we step on 1m bars)
-        step_iv = self.config.replay_step_interval
-        # Step 1: Click the step interval button to open dropdown
-        open_result = self.bridge._run_cli(
-            "ui", "eval", "window._floop.openStepMenu()", timeout=8)
-        open_status = open_result.data.get("result", "?") if open_result.success else "failed"
-        self._log_signal("SYSTEM", 0, f"Step menu: {open_status}")
-        time.sleep(0.5)
-        # Step 2: Select the target interval from the dropdown
-        sel_result = self.bridge._run_cli(
-            "ui", "eval", f"window._floop.selectStepInterval('{step_iv}')", timeout=8)
-        sel_status = sel_result.data.get("result", "?") if sel_result.success else "failed"
-        self._log_signal("SYSTEM", 0, f"Step interval → {step_iv}: {sel_status}")
-        time.sleep(0.5)
-
-        # Start TradingView autoplay (fast-forward)
+        # ── Start autoplay + monitoring ──
         result = self.bridge.replay_autoplay(speed=speed)
         if result.success:
-            self._log_signal("SYSTEM", 0, f"Autoplay started (speed={speed})")
+            self._log_signal("SYSTEM", 0, "Autoplay started — monitoring for signals...")
         else:
             self._log_signal("SYSTEM", 0, f"Autoplay failed: {result.error} — press play manually")
 
-        # Start monitoring loop
         self.start_loop()
         return True
 
