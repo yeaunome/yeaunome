@@ -252,12 +252,24 @@ class ReplayEngine:
         # ── Step 3: Click "Random Bar" (two-step: open dropdown, then click) ──
         self._log_signal("SYSTEM", 0, "3/6 Selecting Random Bar...")
 
+        # First probe what's visible so we know the state
+        probe = self.bridge._run_cli("ui", "eval",
+            "window._floop.probeAllReplayText()", timeout=8)
+        probe_data = probe.data.get("result", "?") if probe.success else probe.error
+        self._log_signal("DEBUG", 0, f"Replay UI: {str(probe_data)[:400]}")
+
         # Step 3a: Open the "SELECT STARTING POINT" dropdown
         dropdown_result = self.bridge._run_cli("ui", "eval",
             "window._floop.openStartingPointDropdown()", timeout=8)
         dropdown_status = dropdown_result.data.get("result", "?") if dropdown_result.success else "failed"
         self._log_signal("SYSTEM", 0, f"  Dropdown: {dropdown_status}")
-        time.sleep(1.0)  # Wait for dropdown to appear
+        time.sleep(1.5)  # Wait for dropdown to appear
+
+        # Probe again after opening dropdown
+        probe2 = self.bridge._run_cli("ui", "eval",
+            "window._floop.probeAllReplayText()", timeout=8)
+        probe2_data = probe2.data.get("result", "?") if probe2.success else probe2.error
+        self._log_signal("DEBUG", 0, f"After dropdown: {str(probe2_data)[:400]}")
 
         # Step 3b: Click "Random bar" from the dropdown
         random_result = self.bridge._run_cli("ui", "eval",
@@ -266,18 +278,12 @@ class ReplayEngine:
         self._log_signal("SYSTEM", 0, f"  Random bar: {random_status}")
 
         if "not_found" in str(random_status):
-            # Probe what's visible for debugging
-            probe = self.bridge._run_cli("ui", "eval",
-                "window._floop.probeReplayPicker()", timeout=8)
-            probe_data = probe.data.get("result", "?") if probe.success else probe.error
-            self._log_signal("DEBUG", 0, f"Picker buttons: {str(probe_data)[:300]}")
-
             # Last resort: use replay start API
             self._log_signal("SYSTEM", 0, "  Random Bar not found — using API start")
             self.start_replay()
 
         self.replay_active = True
-        time.sleep(3)  # Extra wait for chart to load after random bar selection
+        time.sleep(3)  # Wait for chart to load after random bar selection
 
         # ── Step 4: Switch to 5m timeframe (for FLOOP Pro signals) ──
         self._log_signal("SYSTEM", 0, f"4/6 Setting {self.config.timeframe}m timeframe for FLOOP Pro...")
@@ -694,10 +700,10 @@ class ReplayEngine:
 
     def _place_exit_orders(self, fill_price: float, atr: float, side: str):
         """
-        Place SL + TP on the position bar in TradingView after market entry.
-        Uses the TP/SL buttons that appear on the position line on the chart.
-        Mirrors real Floopbot: Hard Stop (ATR×1.5), TP (flat 10pts).
-        Trailing stop managed internally by paper_trader.
+        Place SL + TP as separate Stop/Limit orders via the order panel.
+        Canvas-based TP/SL buttons don't work (they're rendered on canvas).
+        Instead: place a Sell Stop (SL) + Sell Limit (TP) for longs,
+        or Buy Stop (SL) + Buy Limit (TP) for shorts.
         """
         stop_dist = atr * self.config.atr_stop_multiplier
         tp_pts = self.config.flat_tp_pts
@@ -705,48 +711,37 @@ class ReplayEngine:
         if side == "LONG":
             stop_price = round(fill_price - stop_dist, 2)
             tp_price = round(fill_price + tp_pts, 2)
+            sl_side = "Sell"
+            tp_side = "Sell"
         else:
             stop_price = round(fill_price + stop_dist, 2)
             tp_price = round(fill_price - tp_pts, 2)
+            sl_side = "Buy"
+            tp_side = "Buy"
 
         self._tp_price = tp_price
         self._sl_price = stop_price
 
-        # Debug: check what price labels are visible
-        time.sleep(1.0)  # wait for position bar to render on chart
-        debug_labels = self.bridge._run_cli("ui", "eval",
-            "window._floop._debugPriceLabels()", timeout=8)
-        label_data = debug_labels.data.get("result", "?") if debug_labels.success else debug_labels.error
-        self._log_signal("DEBUG", 0, f"Price labels: {str(label_data)[:200]}")
-
-        # Click TP button on the position bar (canvas-rendered)
-        tp_click = self.bridge._run_cli("ui", "eval",
-            f"window._floop.clickPositionTP({fill_price})", timeout=8)
-        tp_click_status = tp_click.data.get("result", "") if tp_click.success else tp_click.error
-        self._log_signal("TP", tp_price, f"TP click: {tp_click_status}")
-
-        if "canvas_click" in str(tp_click_status):
-            time.sleep(0.8)
-            tp_set = self.bridge._run_cli("ui", "eval",
-                f"window._floop.setTPSLPrice({tp_price})", timeout=8)
-            tp_set_status = tp_set.data.get("result", "") if tp_set.success else tp_set.error
-            self._log_signal("TP", tp_price,
-                f"TP @ {tp_price:.2f} (+{tp_pts}pts): {tp_set_status}")
-
-        # Click SL button on the position bar, then set price
+        # Place SL as a Stop order
         time.sleep(0.5)
-        sl_click = self.bridge._run_cli("ui", "eval",
-            f"window._floop.clickPositionSL({fill_price})", timeout=8)
-        sl_click_status = sl_click.data.get("result", "") if sl_click.success else sl_click.error
-        self._log_signal("SL", stop_price, f"SL click: {sl_click_status}")
+        sl_result = self.bridge._run_cli("ui", "eval",
+            f"window._floop.placeStopOrder('{sl_side}', {stop_price})", timeout=10)
+        sl_status = sl_result.data.get("result", "") if sl_result.success else sl_result.error
+        self._log_signal("SL", stop_price,
+            f"SL @ {stop_price:.2f} ({self.config.atr_stop_multiplier}×ATR): {sl_status}")
+        time.sleep(0.8)
 
-        if "canvas_click" in str(sl_click_status):
-            time.sleep(0.8)
-            sl_set = self.bridge._run_cli("ui", "eval",
-                f"window._floop.setTPSLPrice({stop_price})", timeout=8)
-            sl_set_status = sl_set.data.get("result", "") if sl_set.success else sl_set.error
-            self._log_signal("SL", stop_price,
-                f"SL @ {stop_price:.2f} ({self.config.atr_stop_multiplier}×ATR): {sl_set_status}")
+        # Place TP as a Limit order
+        tp_result = self.bridge._run_cli("ui", "eval",
+            f"window._floop.placeLimitOrder('{tp_side}', {tp_price})", timeout=10)
+        tp_status = tp_result.data.get("result", "") if tp_result.success else tp_result.error
+        self._log_signal("TP", tp_price,
+            f"TP @ {tp_price:.2f} (+{tp_pts}pts): {tp_status}")
+        time.sleep(0.5)
+
+        # Switch back to Market order type for next trade
+        self.bridge._run_cli("ui", "eval",
+            "window._floop.resetToMarket()", timeout=5)
 
     def _execute_buy(self, signal: FloopSignal, price: float, bar_time: str):
         """Execute a buy in TradingView replay with SL+TP, matching Floopbot strategy."""

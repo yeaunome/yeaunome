@@ -587,88 +587,145 @@
       return 'interval_not_found:' + interval;
     },
 
-    // Step 1 of Random Bar: Open the "SELECT STARTING POINT" dropdown
-    // by clicking the "Select first available date" text/button at bottom of replay bar
-    openStartingPointDropdown: function() {
-      var all = document.querySelectorAll('button, div, span, [class*=button], [role=button]');
-      // First try: find exact "Select first available date" text
+    // Probe ALL visible text in the replay picker area for debugging
+    probeAllReplayText: function() {
+      var results = [];
+      var all = document.querySelectorAll('*');
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
         if (!el.offsetParent) continue;
+        if (el.children.length > 2) continue;
         var text = (el.textContent || '').trim();
-        if (/select first available date/i.test(text)) {
-          el.click();
-          return 'dropdown_opened:first_available';
-        }
-      }
-      // Second try: find "Random bar" text already visible (dropdown already open)
-      for (var i = 0; i < all.length; i++) {
-        var el = all[i];
-        if (!el.offsetParent) continue;
-        var text = (el.textContent || '').trim();
-        if (/^random bar$/i.test(text)) {
-          return 'dropdown_already_open';
-        }
-      }
-      // Third try: find any element with "select" and "date" in text near bottom
-      for (var i = 0; i < all.length; i++) {
-        var el = all[i];
-        if (!el.offsetParent) continue;
+        if (text.length === 0 || text.length > 50) continue;
         var rect = el.getBoundingClientRect();
-        if (rect.top < window.innerHeight * 0.5) continue;
-        var text = (el.textContent || '').trim();
-        if (/select.*date|starting point/i.test(text)) {
-          el.click();
-          return 'dropdown_opened:' + text.substring(0, 30);
-        }
+        // Only middle area of screen (replay picker)
+        if (rect.top < window.innerHeight * 0.2 || rect.top > window.innerHeight * 0.85) continue;
+        if (rect.left < window.innerWidth * 0.1 || rect.left > window.innerWidth * 0.9) continue;
+        if (rect.width < 5 || rect.height < 5) continue;
+        results.push({
+          t: text.substring(0, 40),
+          tag: el.tagName,
+          dn: el.getAttribute('data-name') || '',
+          role: el.getAttribute('role') || '',
+          cls: (typeof el.className === 'string' ? el.className.substring(0, 50) : ''),
+          x: Math.round(rect.left),
+          y: Math.round(rect.top),
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+          kids: el.children.length,
+          clickable: (el.tagName === 'BUTTON' || el.getAttribute('role') === 'button' || el.style.cursor === 'pointer' || !!el.onclick)
+        });
       }
-      // Fourth try: find clickable element with data-name related to replay start point
-      for (var i = 0; i < all.length; i++) {
-        var el = all[i];
-        if (!el.offsetParent) continue;
-        var dn = el.getAttribute('data-name') || '';
-        if (/start.*point|date.*select|replay.*pick/i.test(dn)) {
-          el.click();
-          return 'dropdown_opened:dn:' + dn;
-        }
+      // Deduplicate by text+position
+      var seen = {};
+      var unique = [];
+      for (var j = 0; j < results.length; j++) {
+        var key = results[j].t + ':' + results[j].y;
+        if (!seen[key]) { seen[key] = true; unique.push(results[j]); }
       }
-      return 'dropdown_not_found';
+      return JSON.stringify(unique.slice(0, 25));
     },
 
-    // Step 2 of Random Bar: Click "Random bar" in the open dropdown
+    // Click "Random bar" — searches for any element with "Random" text and clicks it.
+    // Call this after the SELECT STARTING POINT dropdown is already visible.
     clickRandomBar: function() {
-      var all = document.querySelectorAll('button, div, span, [class*=item], [role=option], [role=menuitem], [class*=button], [role=button]');
-      // Look for "Random bar" text
+      var all = document.querySelectorAll('*');
+      // Pass 1: exact "Random bar" leaf text
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
         if (!el.offsetParent) continue;
         var text = (el.textContent || '').trim();
-        if (/^random bar$/i.test(text)) {
+        if (/^random bar$/i.test(text) && el.children.length === 0) {
+          el.click();
+          return 'random_bar_clicked:exact_leaf';
+        }
+      }
+      // Pass 2: "Random bar" with up to 2 children (might contain icon + text)
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var text = (el.textContent || '').trim();
+        if (/^random bar$/i.test(text) && el.children.length <= 2) {
           el.click();
           return 'random_bar_clicked:exact';
         }
       }
-      // Broader match: contains "random"
+      // Pass 3: contains "Random" anywhere
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
         if (!el.offsetParent) continue;
         var text = (el.textContent || '').trim();
-        if (/random/i.test(text) && text.length < 30) {
+        if (/random/i.test(text) && text.length < 40 && el.children.length <= 3) {
           el.click();
-          return 'random_bar_clicked:' + text;
+          return 'random_bar_clicked:contains:' + text.substring(0, 30);
         }
       }
-      // Check aria-label, title, data-name
+      // Pass 4: data-name, aria-label, title containing "random"
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
         if (!el.offsetParent) continue;
-        var label = (el.getAttribute('aria-label') || '') + (el.getAttribute('title') || '') + (el.getAttribute('data-name') || '');
-        if (/random/i.test(label)) {
+        var attrs = (el.getAttribute('data-name') || '') + '|' + (el.getAttribute('aria-label') || '') + '|' + (el.getAttribute('title') || '');
+        if (/random/i.test(attrs)) {
           el.click();
-          return 'random_bar_clicked:attr:' + label.substring(0, 30);
+          return 'random_bar_clicked:attr:' + attrs.substring(0, 40);
         }
       }
       return 'random_bar_not_found';
+    },
+
+    // Open the starting point selector dropdown.
+    // Clicks the element that shows the current selection (e.g. "Select first available date")
+    openStartingPointDropdown: function() {
+      var all = document.querySelectorAll('*');
+      // Check if "Random bar" is already visible (dropdown already open)
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var text = (el.textContent || '').trim();
+        if (/^random bar$/i.test(text) && el.children.length <= 2) {
+          return 'dropdown_already_open';
+        }
+      }
+      // Find and click the starting point selector button/text
+      // It shows the current selection like "Select first available date" or "Random bar"
+      // Look for elements with these known option texts
+      var selectors = [
+        /^select first available date$/i,
+        /^first available date$/i,
+        /^random bar$/i,
+        /^date\.\.\.$/i,
+        /^bar$/i,
+        /select.*starting.*point/i
+      ];
+      for (var s = 0; s < selectors.length; s++) {
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i];
+          if (!el.offsetParent) continue;
+          var text = (el.textContent || '').trim();
+          if (selectors[s].test(text) && el.children.length <= 2) {
+            var rect = el.getBoundingClientRect();
+            // Must be in the bottom half (replay bar area)
+            if (rect.top > window.innerHeight * 0.4) {
+              el.click();
+              return 'dropdown_opened:' + text.substring(0, 30);
+            }
+          }
+        }
+      }
+      // Look for data-name attributes related to replay starting point
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el.offsetParent) continue;
+        var dn = el.getAttribute('data-name') || '';
+        if (/start|point|date-select|replay-date/i.test(dn)) {
+          var rect = el.getBoundingClientRect();
+          if (rect.top > window.innerHeight * 0.4) {
+            el.click();
+            return 'dropdown_opened:dn:' + dn;
+          }
+        }
+      }
+      return 'dropdown_not_found';
     },
 
     // Probe: find all clickable elements in the replay date picker area
