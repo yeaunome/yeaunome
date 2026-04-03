@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+replay_results/
+*.log
+floop_config.json
+node_modules/
+.env
+*.bak
+*.old
