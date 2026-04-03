@@ -148,7 +148,7 @@
       return 'market_not_found';
     },
 
-    // Click Place Order button (the big "Buy 5 MNQ1! MARKET" button)
+    // Click Place Order button (the big "Buy 10 MNQ1! MARKET" or "LIMIT" button)
     placeOrder: function() {
       // Try data-name first
       var btn = document.querySelector('[data-name=place-and-modify-button]');
@@ -156,13 +156,26 @@
         btn.click();
         return 'order_placed';
       }
-      // Fallback: find button with "MARKET" text in the trading panel
+      // Find the big colored Buy/Sell button in the order panel
       var btns = document.querySelectorAll('button');
       for (var i = 0; i < btns.length; i++) {
         var text = (btns[i].textContent || '').trim();
-        if (/MARKET/i.test(text) && /Buy|Sell/i.test(text) && btns[i].offsetParent) {
+        // Match any order type: MARKET, LIMIT, STOP
+        if (/Buy|Sell/i.test(text) && /MARKET|LIMIT|STOP/i.test(text) && btns[i].offsetParent) {
+          var rect = btns[i].getBoundingClientRect();
+          // Must be a big button (the place order button is wide)
+          if (rect.width > 100 && rect.height > 30) {
+            btns[i].click();
+            return 'order_placed:' + text.substring(0, 30);
+          }
+        }
+      }
+      // Fallback: any button with Buy/Sell and MNQ or contract name
+      for (var i = 0; i < btns.length; i++) {
+        var text = (btns[i].textContent || '').trim();
+        if (/Buy|Sell/i.test(text) && /MNQ|ES|NQ|MES/i.test(text) && btns[i].offsetParent) {
           btns[i].click();
-          return 'order_placed_market_btn';
+          return 'order_placed_symbol:' + text.substring(0, 30);
         }
       }
       // Try "Start creating order" button
