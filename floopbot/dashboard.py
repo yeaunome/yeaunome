@@ -125,8 +125,7 @@ class ReplayEngine:
 
     def start_replay(self, date: str = "") -> bool:
         """Start TradingView replay mode."""
-        self.bridge.replay_stop()
-        time.sleep(1)
+        # Don't stop existing replay — just start fresh
         result = self.bridge.replay_start(date=date or self.config.replay_start_date)
         if result.success:
             self.replay_active = True
