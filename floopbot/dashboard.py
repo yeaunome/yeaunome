@@ -290,7 +290,24 @@ class ReplayEngine:
 
         # Read FLOOP signals
         labels = self.bridge.get_pine_labels(study_filter=self.config.floop_indicator_name)
+        if not labels.success:
+            # Try without filter in case indicator name doesn't match
+            labels = self.bridge.get_pine_labels()
+
         if labels.success:
+            # Debug: log raw label data on first successful read
+            if self.bar_count <= 1 and labels.data:
+                studies = labels.data.get("studies", [])
+                study_names = [s.get("name", "?") for s in studies]
+                total_labels = sum(len(s.get("labels", [])) for s in studies)
+                self._log_signal("DEBUG", 0,
+                                 f"Labels: {total_labels} from studies: {study_names}")
+                # Log first few label texts for debugging
+                for s in studies:
+                    for lbl in s.get("labels", [])[:3]:
+                        self._log_signal("DEBUG", 0,
+                                         f"  Label: {lbl.get('text', '?')} @ {lbl.get('price', 0)}")
+
             signal = self.signal_agg.check_new_signal(labels.data)
             if signal and signal.is_valid:
                 self.last_signal = signal

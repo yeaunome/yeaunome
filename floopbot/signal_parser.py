@@ -126,7 +126,9 @@ def parse_labels(label_data: dict, indicator_name: str = "FLOOP") -> list[FloopS
             continue
 
         for label in study.get("labels", []):
-            text = label.get("text", "")
+            text = label.get("text", "") or ""
+            if not isinstance(text, str):
+                continue
             price = label.get("price", 0.0) or 0.0
 
             side = _classify_label_text(text)
@@ -169,6 +171,8 @@ def parse_tables(table_data: dict, indicator_name: str = "FLOOP") -> dict:
         for table in study.get("tables", []):
             rows = table.get("rows", [])
             for row_text in rows:
+                if not isinstance(row_text, str):
+                    continue
                 stripped = row_text.strip()
 
                 # Extract signal strength from "QUALITY | LOW  6/14"
