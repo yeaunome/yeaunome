@@ -150,40 +150,43 @@
 
     // Click Place Order button (the big "Buy 10 MNQ1! MARKET" or "LIMIT" button)
     placeOrder: function() {
-      // Try data-name first
-      var btn = document.querySelector('[data-name=place-and-modify-button]');
-      if (btn && btn.offsetParent) {
-        btn.click();
-        return 'order_placed';
-      }
-      // Find the big colored Buy/Sell button in the order panel
       var btns = document.querySelectorAll('button');
+      // Strategy 1: find the largest button containing Buy or Sell text
+      // in the right side of the screen (order panel area)
+      var best = null;
+      var bestArea = 0;
       for (var i = 0; i < btns.length; i++) {
-        var text = (btns[i].textContent || '').trim();
-        // Match any order type: MARKET, LIMIT, STOP
-        if (/Buy|Sell/i.test(text) && /MARKET|LIMIT|STOP/i.test(text) && btns[i].offsetParent) {
-          var rect = btns[i].getBoundingClientRect();
-          // Must be a big button (the place order button is wide)
-          if (rect.width > 100 && rect.height > 30) {
-            btns[i].click();
-            return 'order_placed:' + text.substring(0, 30);
-          }
+        var btn = btns[i];
+        if (!btn.offsetParent) continue;
+        var text = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!/Buy|Sell/i.test(text)) continue;
+        var rect = btn.getBoundingClientRect();
+        // Must be on the right side (order panel) and reasonably large
+        if (rect.width < 80 || rect.height < 25) continue;
+        var area = rect.width * rect.height;
+        if (area > bestArea) {
+          bestArea = area;
+          best = {btn: btn, text: text};
         }
       }
-      // Fallback: any button with Buy/Sell and MNQ or contract name
-      for (var i = 0; i < btns.length; i++) {
-        var text = (btns[i].textContent || '').trim();
-        if (/Buy|Sell/i.test(text) && /MNQ|ES|NQ|MES/i.test(text) && btns[i].offsetParent) {
-          btns[i].click();
-          return 'order_placed_symbol:' + text.substring(0, 30);
-        }
+      if (best && bestArea > 3000) {
+        best.btn.click();
+        return 'order_placed:' + best.text.substring(0, 40);
       }
-      // Try "Start creating order" button
+      // Strategy 2: data-name attribute
+      var named = document.querySelector('[data-name=place-and-modify-button]');
+      if (named && named.offsetParent) {
+        named.click();
+        return 'order_placed_named';
+      }
+      // Strategy 3: any button with MARKET/LIMIT/STOP and a symbol name
       for (var i = 0; i < btns.length; i++) {
-        var text = (btns[i].textContent || '').trim();
-        if (/start creating|place order|submit/i.test(text) && btns[i].offsetParent) {
-          btns[i].click();
-          return 'order_placed_submit';
+        var btn = btns[i];
+        if (!btn.offsetParent) continue;
+        var text = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+        if (/MARKET|LIMIT|STOP/i.test(text) && text.length > 10) {
+          btn.click();
+          return 'order_placed_type:' + text.substring(0, 40);
         }
       }
       return 'place_button_not_found';

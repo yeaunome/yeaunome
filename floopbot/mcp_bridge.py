@@ -262,8 +262,9 @@ class TVBridge:
         place_result = self._run_cli("ui", "eval", "window._floop.placeOrder()", timeout=10)
         place_status = place_result.data.get("result", "") if place_result.success else ""
 
-        if "not_found" in str(place_status):
-            return MCPResult(success=False, data={}, error="Place order button not found")
+        if "not_found" in str(place_status) or "order_placed" not in str(place_status):
+            return MCPResult(success=False, data={"action": side.lower(), "result": place_status},
+                             error=f"Place order failed: {place_status}")
 
         return MCPResult(success=True, data={"action": side.lower(), "result": place_status})
 
