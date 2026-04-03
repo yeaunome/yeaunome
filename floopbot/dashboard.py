@@ -396,9 +396,27 @@ class ReplayEngine:
             if self.paper.is_flat:
                 self._execute_sell(signal, price, bar_time)
 
+    def _pause_autoplay(self):
+        """Pause TradingView autoplay before executing a trade."""
+        status = self.bridge.replay_status()
+        if status.success and status.data.get("is_autoplay_started"):
+            self.bridge.replay_autoplay()  # toggle off
+            time.sleep(0.3)
+            return True
+        return False
+
+    def _resume_autoplay(self):
+        """Resume TradingView autoplay after executing a trade."""
+        status = self.bridge.replay_status()
+        if status.success and not status.data.get("is_autoplay_started"):
+            self.bridge.replay_autoplay()  # toggle on
+
     def _execute_buy(self, signal: FloopSignal, price: float, bar_time: str):
         """Execute a buy in TradingView replay and track internally."""
+        was_autoplaying = self._pause_autoplay()
         result = self.bridge.replay_trade("buy")
+        self._log_signal("DEBUG", price,
+                         f"replay_trade(buy) → success={result.success} data={result.data} err={result.error}")
         if result.success:
             self.paper.on_signal(signal, current_price=price, bar_time=bar_time)
             self.position_side = "LONG"
@@ -406,10 +424,16 @@ class ReplayEngine:
             self._log_signal("BUY", price, f"Long opened @ {price:.2f}")
         else:
             self.errors.append(f"Buy failed: {result.error}")
+        if was_autoplaying:
+            time.sleep(0.2)
+            self._resume_autoplay()
 
     def _execute_sell(self, signal: FloopSignal, price: float, bar_time: str):
         """Execute a sell in TradingView replay and track internally."""
+        was_autoplaying = self._pause_autoplay()
         result = self.bridge.replay_trade("sell")
+        self._log_signal("DEBUG", price,
+                         f"replay_trade(sell) → success={result.success} data={result.data} err={result.error}")
         if result.success:
             self.paper.on_signal(signal, current_price=price, bar_time=bar_time)
             self.position_side = "SHORT"
@@ -417,16 +441,25 @@ class ReplayEngine:
             self._log_signal("SELL", price, f"Short opened @ {price:.2f}")
         else:
             self.errors.append(f"Sell failed: {result.error}")
+        if was_autoplaying:
+            time.sleep(0.2)
+            self._resume_autoplay()
 
     def _execute_close(self, reason: str):
         """Close position in TradingView replay."""
+        was_autoplaying = self._pause_autoplay()
         result = self.bridge.replay_trade("close")
+        self._log_signal("DEBUG", self.last_price,
+                         f"replay_trade(close) → success={result.success} data={result.data} err={result.error}")
         if result.success:
             self.position_side = "FLAT"
             self.position_entry = 0.0
             self._log_signal("CLOSE", self.last_price, f"Position closed: {reason}")
         else:
             self.errors.append(f"Close failed: {result.error}")
+        if was_autoplaying:
+            time.sleep(0.2)
+            self._resume_autoplay()
 
     def _log_signal(self, side: str, price: float, msg: str):
         ts = datetime.now().strftime("%H:%M:%S")
