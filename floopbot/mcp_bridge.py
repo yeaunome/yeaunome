@@ -221,14 +221,46 @@ class TVBridge:
     def _place_order_via_ui(self, side: str) -> MCPResult:
         """Select side, switch to Market, click Place Order."""
         self._ensure_trade_helper_loaded()
-        action = "buy" if side == "Buy" else "sell"
-        result = self._run_cli("ui", "eval", f"window._floop.{action}()", timeout=15)
-        if not result.success:
-            return result
-        res_text = str(result.data.get("result", ""))
-        if res_text.startswith("fail:"):
-            return MCPResult(success=False, data=result.data, error=res_text)
-        return MCPResult(success=True, data={"action": side.lower(), "result": res_text})
+
+        # Step 1: Make sure trade panel is open (with delay for DOM render)
+        panel_result = self._run_cli("ui", "eval", "window._floop.openTradePanel()", timeout=10)
+        panel_status = panel_result.data.get("result", "") if panel_result.success else ""
+
+        if panel_status not in ("already_open",):
+            time.sleep(0.8)  # Wait for panel to render
+
+        # Step 2: Select side
+        side_fn = "Buy" if side == "Buy" else "Sell"
+        sel_result = self._run_cli("ui", "eval", f"window._floop.selectSide('{side_fn}')", timeout=10)
+        sel_status = sel_result.data.get("result", "") if sel_result.success else ""
+
+        if "not_found" in str(sel_status):
+            # Panel might not have the Buy/Sell buttons — try opening the top Trade panel
+            self._run_cli("ui", "eval",
+                "document.querySelector('[data-name=trading-floating-toolbar], "
+                "[id*=trading-panel-button]')?.click() || 'no_top_trade'",
+                timeout=5)
+            time.sleep(0.8)
+            sel_result = self._run_cli("ui", "eval", f"window._floop.selectSide('{side_fn}')", timeout=10)
+            sel_status = sel_result.data.get("result", "") if sel_result.success else ""
+
+        if "not_found" in str(sel_status):
+            return MCPResult(success=False, data={"panel": panel_status, "side": sel_status},
+                             error=f"Could not find {side} selector")
+
+        # Step 3: Select Market order type
+        time.sleep(0.2)
+        self._run_cli("ui", "eval", "window._floop.selectMarket()", timeout=10)
+
+        # Step 4: Place order
+        time.sleep(0.3)
+        place_result = self._run_cli("ui", "eval", "window._floop.placeOrder()", timeout=10)
+        place_status = place_result.data.get("result", "") if place_result.success else ""
+
+        if "not_found" in str(place_status):
+            return MCPResult(success=False, data={}, error="Place order button not found")
+
+        return MCPResult(success=True, data={"action": side.lower(), "result": place_status})
 
     def _close_position_via_ui(self) -> MCPResult:
         """Close position via DOM."""
