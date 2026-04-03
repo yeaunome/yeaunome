@@ -172,6 +172,8 @@ body {
   <button class="btn btn-blue" onclick="api('step')">STEP</button>
   <button class="btn btn-blue" onclick="api('start-loop')">AUTO RUN</button>
   <button class="btn btn-gray" onclick="api('stop-loop')">PAUSE</button>
+  <span style="width:20px"></span>
+  <button class="btn btn-sm btn-gray" onclick="checkConn()">CHECK CONNECTION</button>
 </div>
 
 <div class="grid">
@@ -244,6 +246,10 @@ body {
   </div>
 </div>
 
+<div class="log-panel" id="error-log" style="margin: 0 24px 12px; display:none; border-color: #7f1d1d; max-height: 150px;">
+  <h3 style="color: #ef4444;">Errors</h3>
+</div>
+
 <div class="config-panel">
   <h3 onclick="document.getElementById('config-body').style.display = document.getElementById('config-body').style.display === 'none' ? 'flex' : 'none'">
     Settings (click to expand)
@@ -268,7 +274,13 @@ async function api(endpoint, data) {
       headers: {'Content-Type': 'application/json'},
       body: data ? JSON.stringify(data) : '{}',
     });
-    return await resp.json();
+    const result = await resp.json();
+    if (result.errors && result.errors.length > 0) {
+      console.warn('API errors:', result.errors);
+    }
+    // Trigger an immediate status poll after any action
+    setTimeout(poll, 200);
+    return result;
   } catch(e) { console.error(e); }
 }
 
@@ -372,6 +384,20 @@ function updateDashboard(s) {
     tlHtml += `<div class="log-entry"><span class="${sideClass(t.side)}">#${t.id} ${t.side}</span> ${t.entry.toFixed(2)} → ${t.exit.toFixed(2)} <span class="${cls}">${fmt$(t.pnl)}</span> (${t.ticks}t) ${t.reason}</div>`;
   }
   tl.innerHTML = tlHtml;
+
+  // Error log
+  const el = document.getElementById('error-log');
+  const errs = s.errors || [];
+  if (errs.length > 0) {
+    el.style.display = 'block';
+    let elHtml = '<h3 style="color: #ef4444;">Errors</h3>';
+    for (const e of errs.slice().reverse()) {
+      elHtml += `<div class="log-entry" style="color:#f87171">${e}</div>`;
+    }
+    el.innerHTML = elHtml;
+  } else {
+    el.style.display = 'none';
+  }
 }
 
 async function poll() {
@@ -380,6 +406,18 @@ async function poll() {
     const data = await resp.json();
     updateDashboard(data);
   } catch(e) {}
+}
+
+async function checkConn() {
+  try {
+    const resp = await fetch(API + '/api/check');
+    const data = await resp.json();
+    if (data.error) {
+      alert('Connection FAILED: ' + data.error);
+    } else {
+      alert('Connection OK!\n' + JSON.stringify(data, null, 2));
+    }
+  } catch(e) { alert('Dashboard server unreachable: ' + e); }
 }
 
 setInterval(poll, 500);

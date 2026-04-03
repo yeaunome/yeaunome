@@ -177,6 +177,9 @@ class ReplayEngine:
 
     def step_once(self):
         """Advance one bar and process."""
+        if not self.replay_active:
+            self.errors.append("Replay not started — click START REPLAY first")
+            return
         result = self.bridge.replay_step()
         if not result.success:
             self.errors.append(f"Step failed: {result.error}")
@@ -434,7 +437,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         elif path == "/api/start-replay":
             date = data.get("date", "")
             ok = self.engine.start_replay(date=date)
-            self._json_response({"ok": ok})
+            self._json_response({"ok": ok, "errors": self.engine.errors[-3:]})
         elif path == "/api/stop-replay":
             self.engine.stop_replay()
             self._json_response({"ok": True})
@@ -446,7 +449,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._json_response({"ok": True})
         elif path == "/api/step":
             self.engine.step_once()
-            self._json_response({"ok": True})
+            self._json_response({"ok": True, "bar_count": self.engine.bar_count, "errors": self.engine.errors[-3:]})
         elif path == "/api/autoplay":
             speed = data.get("speed", 0)
             result = self.engine.bridge.replay_autoplay(speed=speed)
