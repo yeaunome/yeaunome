@@ -69,15 +69,16 @@ class TVBridge:
         cmd = ["node", self.cli_path] + list(args)
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout
+                cmd, capture_output=True, text=True, timeout=timeout,
+                encoding='utf-8', errors='replace'
             )
+            stderr = (result.stderr or "").strip()
+            stdout = (result.stdout or "").strip()
             if result.returncode != 0:
                 return MCPResult(
                     success=False, data={},
-                    error=result.stderr.strip() or f"Exit code {result.returncode}"
+                    error=stderr or f"Exit code {result.returncode}"
                 )
-            # Parse JSON output (skip stderr lines)
-            stdout = result.stdout.strip()
             if not stdout:
                 return MCPResult(success=True, data={})
             try:
