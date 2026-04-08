@@ -11,16 +11,20 @@ Screenshots saved to ./trade_screenshots/
 import subprocess
 import json
 import time
-import os
 import sys
+import base64
+import calendar
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # ── Config ──
 MCP_CLI = str(Path(__file__).parent / "tradingview-mcp" / "src" / "cli" / "index.js")
 SYMBOL = "MNQ1!"
 TIMEFRAME = "1"  # 1 minute
 SCREENSHOT_DIR = Path(__file__).parent / "trade_screenshots"
+
+# Central Time offset (CT = UTC-5 for CDT)
+CT_OFFSET = timedelta(hours=-5)
 
 # Trades to analyze — Apr 6-7, 2026 CT
 TRADES = [
@@ -37,6 +41,14 @@ TRADES = [
 ]
 
 
+def ct_to_unix(ct_str):
+    """Convert CT datetime string to unix timestamp."""
+    dt = datetime.strptime(ct_str, "%Y-%m-%d %H:%M")
+    # CT is UTC-5 (CDT in April)
+    dt_utc = dt - CT_OFFSET
+    return int(dt_utc.replace(tzinfo=timezone.utc).timestamp())
+
+
 def run_cli(*args, timeout=30):
     """Run tradingview-mcp CLI command and return parsed result."""
     cmd = ["node", MCP_CLI] + list(args)
@@ -44,8 +56,9 @@ def run_cli(*args, timeout=30):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                                 encoding='utf-8', errors='replace')
         stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
         if result.returncode != 0:
-            print(f"  CLI error: {result.stderr or result.returncode}")
+            print(f"  CLI error: {stderr or result.returncode}")
             return None
         if not stdout:
             return {}
@@ -64,57 +77,72 @@ def run_cli(*args, timeout=30):
 def setup_chart():
     """Set symbol and timeframe."""
     print(f"Setting symbol to {SYMBOL}...")
-    run_cli("chart", "set-symbol", SYMBOL)
+    result = run_cli("symbol", SYMBOL)
+    print(f"  {result}")
     time.sleep(2)
 
     print(f"Setting timeframe to {TIMEFRAME}m...")
-    run_cli("chart", "set-timeframe", TIMEFRAME)
+    result = run_cli("timeframe", TIMEFRAME)
+    print(f"  {result}")
     time.sleep(2)
 
 
 def get_ohlcv_bars(count=100):
-    """Get recent OHLCV bars from the chart."""
-    result = run_cli("data", "get-ohlcv", "--bars", str(count))
-    if result and "bars" in result:
-        return result["bars"]
-    if result and "data" in result and "bars" in result["data"]:
-        return result["data"]["bars"]
+    """Get visible OHLCV bars from the chart."""
+    result = run_cli("ohlcv", "-n", str(count))
+    if not result:
+        return None
+    # Try common response shapes
+    if isinstance(result, dict):
+        for key in ("bars", "data", "candles"):
+            if key in result:
+                val = result[key]
+                if isinstance(val, list):
+                    return val
+                if isinstance(val, dict) and "bars" in val:
+                    return val["bars"]
+    if isinstance(result, list):
+        return result
     return result
 
 
 def scroll_to_date(date_str):
-    """Scroll chart to a specific date. Format: YYYY-MM-DD or YYYY-MM-DD HH:MM"""
-    result = run_cli("chart", "scroll-to-date", date_str)
+    """Scroll chart to a specific date. Format: YYYY-MM-DD HH:MM (CT)"""
+    result = run_cli("scroll", date_str)
     return result
 
 
-def set_visible_range(start_date, end_date):
-    """Set the visible range of the chart."""
-    result = run_cli("chart", "set-visible-range", start_date, end_date)
+def set_visible_range(start_ct, end_ct):
+    """Set the visible range using unix timestamps."""
+    start_unix = ct_to_unix(start_ct)
+    end_unix = ct_to_unix(end_ct)
+    result = run_cli("range", "--from", str(start_unix), "--to", str(end_unix))
     return result
 
 
 def capture_screenshot(filename, region="chart"):
     """Capture screenshot and save to file."""
-    result = run_cli("capture", "screenshot", "--region", region)
+    args = ["screenshot"]
+    if region != "chart":
+        args += ["-r", region]
+    args += ["-o", str(filename).replace(".png", "")]
+
+    result = run_cli(*args, timeout=15)
     if result and isinstance(result, dict):
-        # The CLI might return base64 image data or save to file
-        if "image" in result:
-            import base64
-            img_data = base64.b64decode(result["image"])
+        # Check if base64 image data returned
+        img_b64 = result.get("image") or (result.get("data", {}) or {}).get("image")
+        if img_b64:
+            img_data = base64.b64decode(img_b64)
             with open(filename, "wb") as f:
                 f.write(img_data)
-            return True
-        if "data" in result and "image" in result.get("data", {}):
-            import base64
-            img_data = base64.b64decode(result["data"]["image"])
-            with open(filename, "wb") as f:
-                f.write(img_data)
+            print(f"  Saved: {filename}")
             return True
         if "path" in result:
-            print(f"  Screenshot saved by CLI to: {result['path']}")
+            print(f"  Screenshot saved by CLI: {result['path']}")
             return True
-    # Try alternate: just save whatever came back
+        if result.get("success"):
+            print(f"  Screenshot taken (check CLI output dir)")
+            return True
     print(f"  Screenshot result: {str(result)[:200]}")
     return False
 
@@ -127,52 +155,64 @@ def analyze_trade(trade, index):
     entry_price = trade["entry"]
 
     print(f"\n{'='*60}")
-    print(f"Trade #{index+1}: {label} — {side} @ {entry_price}")
+    print(f"Trade #{index+1}: {label} -- {side} @ {entry_price}")
     print(f"{'='*60}")
 
     # Scroll to the trade time
-    print(f"  Scrolling to {entry_time}...")
+    print(f"  Scrolling to {entry_time} CT...")
     scroll_to_date(entry_time)
     time.sleep(3)
 
     # Capture screenshot
-    filename = SCREENSHOT_DIR / f"trade_{index+1:02d}_{label.replace(' ', '_').replace(':', '')}.png"
+    safe_label = label.replace(' ', '_').replace(':', '').replace('(', '').replace(')', '')
+    filename = SCREENSHOT_DIR / f"trade_{index+1:02d}_{safe_label}.png"
     print(f"  Capturing screenshot...")
     capture_screenshot(str(filename))
 
-    # Try to get OHLCV data around the entry for MAE analysis
+    # Get OHLCV data for MAE analysis
     print(f"  Fetching bar data for MAE analysis...")
-    bars = get_ohlcv_bars(60)  # Get 60 bars (1 hour of 1m data)
+    bars = get_ohlcv_bars(60)
 
     if bars and isinstance(bars, list):
-        # Calculate MAE — worst price move against the trade
-        if side == "Long":
-            # For longs, MAE = entry - lowest low after entry
-            lows = [b.get("low", b.get("l", 0)) for b in bars if b.get("low", b.get("l", 0)) > 0]
-            if lows:
-                worst = min(lows)
-                mae = entry_price - worst
-                print(f"  Lowest low in window: {worst}")
-                print(f"  MAE (adverse excursion): {mae:.2f} pts (${mae * 2:.2f} per contract)")
-        else:
-            # For shorts, MAE = highest high after entry - entry
-            highs = [b.get("high", b.get("h", 0)) for b in bars if b.get("high", b.get("h", 0)) > 0]
-            if highs:
-                worst = max(highs)
-                mae = worst - entry_price
-                print(f"  Highest high in window: {worst}")
-                print(f"  MAE (adverse excursion): {mae:.2f} pts (${mae * 2:.2f} per contract)")
+        calc_mae(bars, side, entry_price)
+    else:
+        print(f"  Could not get bar data: {type(bars)}")
 
     return bars
 
 
+def calc_mae(bars, side, entry_price):
+    """Calculate MAE from bar data."""
+    if side == "Long":
+        lows = []
+        for b in bars:
+            low = b.get("low") or b.get("l") or b.get("Low") or 0
+            if low > 0:
+                lows.append(low)
+        if lows:
+            worst = min(lows)
+            mae = entry_price - worst
+            print(f"  Lowest low in window: {worst}")
+            print(f"  MAE (adverse excursion): {mae:.2f} pts (${mae * 2:.2f}/contract)")
+    else:
+        highs = []
+        for b in bars:
+            high = b.get("high") or b.get("h") or b.get("High") or 0
+            if high > 0:
+                highs.append(high)
+        if highs:
+            worst = max(highs)
+            mae = worst - entry_price
+            print(f"  Highest high in window: {worst}")
+            print(f"  MAE (adverse excursion): {mae:.2f} pts (${mae * 2:.2f}/contract)")
+
+
 def capture_full_session():
-    """Capture the full session overview (11:45 PM Apr 6 to 2:20 PM Apr 7)."""
+    """Capture the full session overview (11:45 PM Apr 6 to 2:20 PM Apr 7 CT)."""
     print(f"\n{'='*60}")
     print("Full Session Overview")
     print(f"{'='*60}")
 
-    # Set visible range to cover the full session
     print("  Setting visible range for full session...")
     set_visible_range("2026-04-06 23:30", "2026-04-07 14:30")
     time.sleep(3)
@@ -183,7 +223,6 @@ def capture_full_session():
 
 
 def main():
-    # Create screenshot directory
     SCREENSHOT_DIR.mkdir(exist_ok=True)
 
     # Check CLI exists
@@ -194,11 +233,10 @@ def main():
 
     # Check TradingView connection
     print("Checking TradingView connection...")
-    health = run_cli("tv", "health-check")
+    health = run_cli("status")
     if not health:
-        print("ERROR: Cannot connect to TradingView Desktop.")
+        print("ERROR: Cannot connect to TradingView Desktop on port 9222.")
         print("Make sure TradingView is running with --remote-debugging-port=9222")
-        print("Run start_floopbot.bat first.")
         sys.exit(1)
     print(f"  Connected: {health}")
 
@@ -211,7 +249,7 @@ def main():
     # Analyze each trade
     for i, trade in enumerate(TRADES):
         analyze_trade(trade, i)
-        time.sleep(2)  # Brief pause between trades
+        time.sleep(2)
 
     print(f"\n{'='*60}")
     print(f"Done! Screenshots saved to: {SCREENSHOT_DIR}")
